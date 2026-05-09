@@ -1,5 +1,27 @@
-venv/
+# Python
 __pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+backend/venv/
+
+# Environment variables
 .env
+
+# Logs
 *.log
 nohup.out
+
+# Database dumps
+*.sql
+
+# Secrets
+*.pem
+*.key
+
+# VSCode
+.vscode/
+
+# OS files
+.DS_Store
