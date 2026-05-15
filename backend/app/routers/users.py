@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 
 from app.database import SessionLocal
-from app.models import User
+from app.models import User, RadCheck, RadReply
 
 router = APIRouter(
     prefix="/users",
@@ -43,6 +43,25 @@ def create_user(
     )
 
     db.add(user)
+ # FreeRADIUS Authentication Entry
+    radcheck = RadCheck(
+        username=username,
+        attribute="Cleartext-Password",
+        op=":=",
+        value=password
+    )
+
+    db.add(radcheck)
+
+    # FreeRADIUS Bandwidth Policy
+    radreply = RadReply(
+        username=username,
+        attribute="Mikrotik-Rate-Limit",
+        op=":=",
+        value="10M/10M"
+    )
+
+    db.add(radreply)
     db.commit()
     db.refresh(user)
 
