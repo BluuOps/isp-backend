@@ -6,6 +6,8 @@ from app.schemas.user import (
     UserPlanChange,
     UserResponse,
     UserSuspendResponse,
+    UserPendingResponse,
+    UserTerminateResponse,
     UserUpdate,
 )
 
@@ -16,8 +18,10 @@ __all__ = [
     "UserActivateResponse",
     "UserCreate",
     "UserDeleteResponse",
+    "UserPendingResponse",
     "UserPlanChange",
     "UserResponse",
     "UserSuspendResponse",
+    "UserTerminateResponse",
     "UserUpdate",
 ]

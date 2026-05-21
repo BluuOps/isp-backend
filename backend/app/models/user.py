@@ -15,3 +15,4 @@ class User(Base):
     status = Column(String(50), nullable=False, default="active")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    status = Column(String, default="ACTIVE")

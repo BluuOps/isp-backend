@@ -3,12 +3,34 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+from typing import Optional
+from pydantic import BaseModel, Field
+
+
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
-    password: str = Field(..., min_length=1, max_length=253)
-    service_plan: str = Field(..., min_length=1, max_length=100)
-    zone: Optional[str] = Field(default=None, max_length=100)
-    status: str = Field(default="active", pattern="^(active|suspended|inactive)$")
+
+    password: str = Field(
+        ...,
+        min_length=1,
+        max_length=253
+    )
+
+    service_plan: str = Field(
+        ...,
+        min_length=1,
+        max_length=100
+    )
+
+    zone: Optional[str] = Field(
+        default=None,
+        max_length=100
+    )
+
+    status: str = Field(
+        default="pending",
+        pattern="^(active|suspended|pending|terminated)$"
+    )
 
 
 class UserUpdate(BaseModel):
@@ -16,7 +38,7 @@ class UserUpdate(BaseModel):
     password: Optional[str] = Field(default=None, min_length=1, max_length=253)
     service_plan: Optional[str] = Field(default=None, min_length=1, max_length=100)
     zone: Optional[str] = Field(default=None, max_length=100)
-    status: Optional[str] = Field(default=None, pattern="^(active|suspended|inactive)$")
+    status: Optional[str] = Field(default=None, pattern="^(active|suspended|pending|terminated)$")
 
 
 class UserPlanChange(BaseModel):
@@ -31,6 +53,9 @@ class UserResponse(BaseModel):
     service_plan: str
     zone: Optional[str] = None
     status: str
+
+class Config:
+        orm_mode = True
 
 
 class UserLifecycleResponse(BaseModel):
@@ -48,6 +73,12 @@ class UserSuspendResponse(UserLifecycleResponse):
 class UserActivateResponse(UserLifecycleResponse):
     pass
 
+class UserPendingResponse(UserLifecycleResponse):
+    pass
+
+
+class UserTerminateResponse(UserLifecycleResponse):
+    pass
 
 class UserDeleteResponse(BaseModel):
     id: int
