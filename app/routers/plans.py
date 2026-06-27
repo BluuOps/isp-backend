@@ -72,11 +72,15 @@ def delete_plan(plan_id: int, db: Session = Depends(get_db)) -> None:
     if not plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service plan not found")
 
-    users_on_plan = db.query(User).filter(User.service_plan == plan.name).first()
+    users_on_plan = (
+        db.query(User)
+        .filter(User.service_plan == plan.name, User.status != "terminated")
+        .first()
+    )
     if users_on_plan:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot delete a service plan assigned to existing users",
+            detail="Cannot delete a service plan assigned to non-terminated subscribers",
         )
 
     db.delete(plan)
