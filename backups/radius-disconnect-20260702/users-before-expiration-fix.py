@@ -146,30 +146,16 @@ def delete_radius_provisioning(db: Session, username: str) -> None:
         db.delete(row)
 
 
-def apply_radius_lifecycle(
-    db: Session,
-    user: User,
-    plan: ServicePlan | None = None,
-) -> None:
+def apply_radius_lifecycle(db: Session, user: User, plan: ServicePlan | None = None) -> None:
     if user.status == STATUS_ACTIVE:
         if plan is None:
             plan = get_active_plan_or_400(user.service_plan, db)
-
         provision_active_radius(db, user, plan)
-
-        expiration_date = user.expiration_date
-        if expiration_date and expiration_date.tzinfo is None:
-            expiration_date = expiration_date.replace(tzinfo=timezone.utc)
-
-        if expiration_date and expiration_date <= datetime.now(timezone.utc):
-            block_radius_authentication(db, user.username)
-
         return
 
     if user.status == STATUS_SUSPENDED:
         if plan is None:
             plan = get_active_plan_or_400(user.service_plan, db)
-
         provision_active_radius(db, user, plan)
         block_radius_authentication(db, user.username)
         return
@@ -183,6 +169,7 @@ def apply_radius_lifecycle(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Invalid subscriber lifecycle status",
     )
+
 
 @router.get("/", response_model=List[UserResponse])
 def list_users(db: Session = Depends(get_db)) -> list[User]:
@@ -252,14 +239,6 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
 
     if "zone" in update_data:
         user.zone = update_data["zone"]
-
-    if "expiration_date" in update_data:
-        if update_data["expiration_date"] is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Expiration date cannot be empty",
-            )
-        user.expiration_date = update_data["expiration_date"]
 
     if "status" in update_data:
         user.status = update_data["status"]

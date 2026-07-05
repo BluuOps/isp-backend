@@ -8,7 +8,6 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    expiration_date = Column(DateTime(timezone=True), nullable=True)
     username = Column(String(100), unique=True, index=True, nullable=False)
     password = Column(String(255), nullable=False)
     customer_id = Column(

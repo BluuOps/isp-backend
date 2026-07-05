@@ -1,21 +1,17 @@
 from typing import List
 
-import calendar
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Customer, RadCheck, RadReply, ServicePlan, User
+from app.models import RadCheck, RadReply, ServicePlan, User
 from app.schemas import (
     UserActivateResponse,
     UserCreate,
     UserDeleteResponse,
     UserPendingResponse,
     UserPlanChange,
-    UserRecharge,
     UserResponse,
     UserSuspendResponse,
     UserTerminateResponse,
@@ -66,13 +62,6 @@ def ensure_username_available(username: str, db: Session, user_id: int | None = 
             status_code=status.HTTP_409_CONFLICT,
             detail="Username already exists",
         )
-
-def add_calendar_months(value: datetime, months: int) -> datetime:
-    month_index = value.month - 1 + months
-    year = value.year + month_index // 12
-    month = month_index % 12 + 1
-    day = min(value.day, calendar.monthrange(year, month)[1])
-    return value.replace(year=year, month=month, day=day)
 
 
 def upsert_radcheck(db: Session, username: str, attribute: str, value: str, op: str = ":=") -> RadCheck:
@@ -146,30 +135,16 @@ def delete_radius_provisioning(db: Session, username: str) -> None:
         db.delete(row)
 
 
-def apply_radius_lifecycle(
-    db: Session,
-    user: User,
-    plan: ServicePlan | None = None,
-) -> None:
+def apply_radius_lifecycle(db: Session, user: User, plan: ServicePlan | None = None) -> None:
     if user.status == STATUS_ACTIVE:
         if plan is None:
             plan = get_active_plan_or_400(user.service_plan, db)
-
         provision_active_radius(db, user, plan)
-
-        expiration_date = user.expiration_date
-        if expiration_date and expiration_date.tzinfo is None:
-            expiration_date = expiration_date.replace(tzinfo=timezone.utc)
-
-        if expiration_date and expiration_date <= datetime.now(timezone.utc):
-            block_radius_authentication(db, user.username)
-
         return
 
     if user.status == STATUS_SUSPENDED:
         if plan is None:
             plan = get_active_plan_or_400(user.service_plan, db)
-
         provision_active_radius(db, user, plan)
         block_radius_authentication(db, user.username)
         return
@@ -183,6 +158,7 @@ def apply_radius_lifecycle(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Invalid subscriber lifecycle status",
     )
+
 
 @router.get("/", response_model=List[UserResponse])
 def list_users(db: Session = Depends(get_db)) -> list[User]:
@@ -253,14 +229,6 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     if "zone" in update_data:
         user.zone = update_data["zone"]
 
-    if "expiration_date" in update_data:
-        if update_data["expiration_date"] is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Expiration date cannot be empty",
-            )
-        user.expiration_date = update_data["expiration_date"]
-
     if "status" in update_data:
         user.status = update_data["status"]
 
@@ -281,70 +249,6 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     db.refresh(user)
     return user
 
-
-@router.post("/{user_id}/recharge", response_model=UserResponse)
-def recharge_user(
-    user_id: int,
-    payload: UserRecharge,
-    db: Session = Depends(get_db),
-) -> User:
-    user = get_user_or_404(user_id, db)
-
-    if user.status == STATUS_TERMINATED:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Terminated PPPoE accounts cannot be recharged",
-        )
-
-    if not user.customer_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="PPPoE account must be linked to a CRM customer before recharge",
-        )
-
-    customer = db.query(Customer).filter(Customer.id == user.customer_id).first()
-    if not customer:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Linked CRM customer does not exist",
-        )
-
-    plan = (
-        db.query(ServicePlan)
-        .filter(
-            ServicePlan.id == payload.plan_id,
-            ServicePlan.status == "active",
-        )
-        .first()
-    )
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Selected service plan does not exist or is inactive",
-        )
-
-    now = datetime.now(timezone.utc)
-    extension_base = (
-        user.expiration_date
-        if user.expiration_date and user.expiration_date > now
-        else now
-    )
-
-    try:
-        user.service_plan = plan.name
-        user.expiration_date = add_calendar_months(
-            extension_base,
-            payload.quantity,
-        )
-        user.status = STATUS_ACTIVE
-        provision_active_radius(db, user, plan)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-
-    db.refresh(user)
-    return user
 
 @router.put("/{user_id}/suspend", response_model=UserSuspendResponse)
 def suspend_user(user_id: int, db: Session = Depends(get_db)) -> UserSuspendResponse:

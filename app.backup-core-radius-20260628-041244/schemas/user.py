@@ -2,7 +2,10 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from datetime import datetime
+
+from typing import Optional
+from pydantic import BaseModel, Field
+
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
@@ -21,8 +24,6 @@ class UserCreate(BaseModel):
         max_length=100
     )
 
-    expiration_date: Optional[datetime] = None
-
     zone: Optional[str] = Field(
         default=None,
         max_length=100
@@ -39,7 +40,6 @@ class UserUpdate(BaseModel):
     password: Optional[str] = Field(default=None, min_length=1, max_length=253)
     customer_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
     service_plan: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    expiration_date: Optional[datetime] = None
     zone: Optional[str] = Field(default=None, max_length=100)
     status: Optional[str] = Field(default=None, pattern="^(active|suspended|pending|terminated)$")
 
@@ -47,16 +47,11 @@ class UserUpdate(BaseModel):
 class UserPlanChange(BaseModel):
     service_plan: str = Field(..., min_length=1, max_length=100)
 
-class UserRecharge(BaseModel):
-    plan_id: int = Field(..., gt=0)
-    quantity: int = Field(default=1, ge=1, le=24)
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     customer_id: Optional[str] = None
-
-    expiration_date: Optional[datetime] = None
 
     id: int
     username: str
