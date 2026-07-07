@@ -26,4 +26,3 @@ def seed_default_service_plans(db: Session) -> None:
                 status="active",
             )
         )
-

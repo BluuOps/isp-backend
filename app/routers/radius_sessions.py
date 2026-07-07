@@ -6,6 +6,8 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import RadAcct, RadCheck, User
 from app.schemas.radius_session import (
@@ -16,30 +18,30 @@ from app.schemas.radius_session import (
 
 logger = logging.getLogger(__name__)
 
-RADCLIENT_BIN = os.getenv("RADIUS_RADCLIENT_BIN", "/usr/bin/radclient")
-COA_SECRET_FILE = os.getenv(
-    "RADIUS_COA_SECRET_FILE",
-    "/etc/radiusfiber/coa.secret",
-)
-COA_NAS_IP = os.getenv("RADIUS_COA_NAS_IP", "192.168.222.1")
-COA_PORT = os.getenv("RADIUS_COA_PORT", "3799")
-PILOT_CALLED_STATION_ID = os.getenv(
-    "RADIUS_PILOT_CALLED_STATION_ID",
-    "core-radius-pilot",
-)
+RADCLIENT_BIN = settings.radclient_bin
+COA_SECRET_FILE = settings.coa_secret_path
+COA_NAS_IP = settings.coa_nas_ip
+COA_PORT = settings.coa_port
+PILOT_CALLED_STATION_ID = settings.pilot_calledstationid
 
 REJECT_ATTRIBUTE = "Auth-Type"
 REJECT_VALUE = "Reject"
-
 
 router = APIRouter(prefix="/radius", tags=["RADIUS Sessions"])
 
 
 @router.get("/sessions", response_model=List[RadiusSessionResponse])
-def list_active_sessions(db: Session = Depends(get_db)) -> list[RadiusSessionResponse]:
+def list_active_sessions(
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> list[RadiusSessionResponse]:
     rows = (
         db.query(RadAcct)
-        .filter(RadAcct.acctstoptime.is_(None))
+        .join(User, User.username == RadAcct.username)
+        .filter(
+            RadAcct.acctstoptime.is_(None),
+            User.organization_id == organization.id,
+        )
         .order_by(RadAcct.acctstarttime.desc())
         .limit(500)
         .all()
@@ -69,12 +71,12 @@ def list_active_sessions(db: Session = Depends(get_db)) -> list[RadiusSessionRes
 def disconnect_session(
     payload: RadiusDisconnectRequest,
     db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
 ) -> RadiusDisconnectResponse:
-    account = (
-        db.query(User)
-        .filter(User.username == payload.username)
-        .first()
-    )
+    account = db.query(User).filter(
+        User.username == payload.username,
+        User.organization_id == organization.id,
+    ).first()
     if not account:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -124,10 +126,7 @@ def disconnect_session(
                 detail="Session NAS does not match the configured Core RADIUS NAS",
             )
 
-        if not os.path.isfile(COA_SECRET_FILE) or not os.access(
-            COA_SECRET_FILE,
-            os.R_OK,
-        ):
+        if not os.path.isfile(COA_SECRET_FILE) or not os.access(COA_SECRET_FILE, os.R_OK):
             logger.error("RADIUS CoA secret file is unavailable")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -176,9 +175,7 @@ def disconnect_session(
         f"NAS-IP-Address = {active_session.nasipaddress}",
     ]
     if active_session.framedipaddress:
-        attributes.append(
-            f"Framed-IP-Address = {active_session.framedipaddress}"
-        )
+        attributes.append(f"Framed-IP-Address = {active_session.framedipaddress}")
 
     request_body = "\n".join(attributes) + "\n"
 
@@ -199,10 +196,7 @@ def disconnect_session(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        logger.warning(
-            "RADIUS disconnect timed out for user %s",
-            payload.username,
-        )
+        logger.warning("RADIUS disconnect timed out for user %s", payload.username)
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="Authentication is blocked, but the NAS did not answer the disconnect request",
@@ -237,3 +231,5 @@ def disconnect_session(
         session_id=active_session.acctsessionid,
         message="PPPoE authentication blocked and live session disconnected",
     )
+from app.core.config import settings
+from app.core.tenant import OrganizationContext, get_organization_context

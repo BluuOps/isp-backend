@@ -15,14 +15,6 @@ class RadiusSessionResponse(BaseModel):
     input_octets: int = 0
     output_octets: int = 0
 
-class RadiusDisconnectRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=253)
-
-
-class RadiusDisconnectResponse(BaseModel):
-    username: str
-    session_id: str
-    message: str
 
 class RadiusDisconnectRequest(BaseModel):
     username: str = Field(
@@ -30,3 +22,9 @@ class RadiusDisconnectRequest(BaseModel):
         max_length=253,
         pattern=r"^[A-Za-z0-9_.@-]+$",
     )
+
+
+class RadiusDisconnectResponse(BaseModel):
+    username: str
+    session_id: str
+    message: str

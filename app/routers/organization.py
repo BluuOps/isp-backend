@@ -1,0 +1,138 @@
+from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy.orm import Session
+
+from app.core.tenant import OrganizationContext, get_organization_context
+from app.database import get_db
+from app.models import (
+    FeatureFlag,
+    NotificationSetting,
+    Organization,
+    OrganizationStaff,
+    Subscription,
+)
+from app.schemas.management import (
+    NotificationSettingsUpdate,
+    OrganizationResponse,
+    OrganizationUpdate,
+    StaffCreate,
+    StaffResponse,
+    StaffUpdate,
+    SubscriptionResponse,
+)
+from app.services.audit import record_audit
+from app.services.limits import enforce_limit
+from app.services.security import generate_temporary_password, hash_password
+
+router = APIRouter(prefix="/organization", tags=["Organization Management"])
+
+
+def current_organization(db: Session, context: OrganizationContext) -> Organization:
+    organization = db.query(Organization).filter(Organization.id == context.id).first()
+    if not organization:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return organization
+
+
+@router.get("/profile", response_model=OrganizationResponse)
+def get_profile(db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    return current_organization(db, context)
+
+
+@router.put("/profile", response_model=OrganizationResponse)
+def update_profile(payload: OrganizationUpdate, db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    organization = current_organization(db, context)
+    allowed = {"name", "company_email", "company_phone", "website", "country", "timezone", "currency", "logo"}
+    changes = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if k in allowed}
+    old = {key: getattr(organization, key) for key in changes}
+    for field, value in changes.items():
+        setattr(organization, field, value)
+    record_audit(db, organization_id=organization.id, actor="organization-admin", action="organization.profile_updated", target_type="organization", target_id=str(organization.id), old_value=old, new_value=changes)
+    db.commit()
+    db.refresh(organization)
+    return organization
+
+
+@router.get("/settings")
+def get_settings(db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    settings = db.query(NotificationSetting).filter(NotificationSetting.organization_id == context.id).first()
+    if not settings:
+        raise HTTPException(status_code=404, detail="Organization settings not found")
+    return settings
+
+
+@router.put("/settings")
+def update_settings(payload: NotificationSettingsUpdate, db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    settings = db.query(NotificationSetting).filter(NotificationSetting.organization_id == context.id).first()
+    if not settings:
+        raise HTTPException(status_code=404, detail="Organization settings not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(settings, field, value)
+    db.commit()
+    return settings
+
+
+@router.get("/staff", response_model=list[StaffResponse])
+def list_staff(db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    return db.query(OrganizationStaff).filter(OrganizationStaff.organization_id == context.id).order_by(OrganizationStaff.id).all()
+
+
+@router.post("/staff", status_code=201)
+def create_staff(payload: StaffCreate, db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    organization = current_organization(db, context)
+    enforce_limit(db, organization, "staff")
+    duplicate = db.query(OrganizationStaff).filter(OrganizationStaff.organization_id == context.id, OrganizationStaff.email == payload.email).first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Staff email already exists")
+    temporary = generate_temporary_password()
+    staff = OrganizationStaff(
+        organization_id=context.id, name=payload.name, email=payload.email,
+        password_hash=hash_password(temporary), role=payload.role,
+        status="active", is_temporary_password=True,
+    )
+    db.add(staff)
+    db.flush()
+    record_audit(db, organization_id=context.id, actor="organization-admin", action="staff.added", target_type="staff", target_id=str(staff.id), new_value={"name": staff.name, "email": staff.email, "role": staff.role})
+    db.commit()
+    db.refresh(staff)
+    return {"staff": StaffResponse.model_validate(staff), "temporary_password": temporary}
+
+
+@router.put("/staff/{staff_id}", response_model=StaffResponse)
+def update_staff(staff_id: int, payload: StaffUpdate, db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    staff = db.query(OrganizationStaff).filter(OrganizationStaff.id == staff_id, OrganizationStaff.organization_id == context.id).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(staff, field, value)
+    db.commit()
+    db.refresh(staff)
+    return staff
+
+
+@router.delete("/staff/{staff_id}", status_code=204)
+def delete_staff(staff_id: int, db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    staff = db.query(OrganizationStaff).filter(OrganizationStaff.id == staff_id, OrganizationStaff.organization_id == context.id).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    if staff.role == "Organization Admin" and db.query(OrganizationStaff).filter(OrganizationStaff.organization_id == context.id, OrganizationStaff.role == "Organization Admin", OrganizationStaff.status == "active").count() <= 1:
+        raise HTTPException(status_code=409, detail="Cannot remove the last organization admin")
+    record_audit(db, organization_id=context.id, actor="organization-admin", action="staff.removed", target_type="staff", target_id=str(staff.id), old_value={"name": staff.name, "email": staff.email, "role": staff.role})
+    db.delete(staff)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/subscription", response_model=SubscriptionResponse)
+def get_subscription(db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    subscription = db.query(Subscription).filter(Subscription.organization_id == context.id).order_by(Subscription.id.desc()).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return subscription
+
+
+@router.get("/feature-flags")
+def get_feature_flags(db: Session = Depends(get_db), context: OrganizationContext = Depends(get_organization_context)):
+    global_flags = {flag.key: flag for flag in db.query(FeatureFlag).filter(FeatureFlag.organization_id.is_(None)).all()}
+    overrides = {flag.key: flag for flag in db.query(FeatureFlag).filter(FeatureFlag.organization_id == context.id).all()}
+    keys = sorted(set(global_flags) | set(overrides))
+    return [{"key": key, "enabled": (overrides.get(key) or global_flags[key]).enabled, "configuration": (overrides.get(key) or global_flags[key]).configuration} for key in keys]

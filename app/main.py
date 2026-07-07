@@ -1,8 +1,12 @@
+import os
+import shutil
+
 from fastapi import FastAPI
+from sqlalchemy import inspect, text
 
-from app.database import Base, SessionLocal, engine
-from app.routers import billing, customers, plans, radius_sessions, users
-
+from app.core.config import settings
+from app.database import engine
+from app.routers import billing, customers, organization, plans, platform, radius_sessions, users
 
 
 app = FastAPI(
@@ -17,21 +21,41 @@ app.include_router(plans.router)
 app.include_router(billing.router)
 app.include_router(customers.router)
 app.include_router(radius_sessions.router)
-
-@app.on_event("startup")
-def startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-    try:
-
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+app.include_router(platform.router)
+app.include_router(organization.router)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def readiness() -> dict[str, object]:
+    required_tables = {
+        "platform", "organizations", "subscriptions", "audit_logs",
+        "feature_flags", "roles", "customers", "users", "service_plans",
+        "billing_accounts", "radacct", "organization_staff", "organization_roles",
+        "zones", "organization_billing_profiles", "notification_settings",
+    }
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))
+        tables = set(inspect(connection).get_table_names())
+        migration_current = None
+        if "alembic_version" in tables:
+            migration_current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one_or_none()
+
+    checks = {
+        "database": True,
+        "tables": not bool(required_tables - tables),
+        "coa_secret": os.path.isfile(settings.coa_secret_path)
+        and os.access(settings.coa_secret_path, os.R_OK),
+        "radclient": os.path.isfile(settings.radclient_bin)
+        and os.access(settings.radclient_bin, os.X_OK),
+        "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
+        "migration_status": migration_current == "0003_commercial_management",
+    }
+    ready = all(value for value in checks.values() if isinstance(value, bool))
+    return {"status": "ready" if ready else "not_ready", "checks": checks}

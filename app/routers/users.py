@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import Customer, RadCheck, RadReply, ServicePlan, User
 from app.schemas import (
@@ -22,30 +23,37 @@ from app.schemas import (
     UserUpdate,
 )
 
+
 router = APIRouter(prefix="/users", tags=["Users"])
 
 MIKROTIK_RATE_LIMIT_ATTRIBUTE = "Mikrotik-Rate-Limit"
 PASSWORD_ATTRIBUTE = "Cleartext-Password"
 REJECT_ATTRIBUTE = "Auth-Type"
 REJECT_VALUE = "Reject"
-
 STATUS_ACTIVE = "active"
 STATUS_SUSPENDED = "suspended"
 STATUS_PENDING = "pending"
 STATUS_TERMINATED = "terminated"
 
 
-def get_user_or_404(user_id: int, db: Session) -> User:
-    user = db.query(User).filter(User.id == user_id).first()
+def get_user_or_404(user_id: int, db: Session, organization_id: int) -> User:
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.organization_id == organization_id,
+    ).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found")
     return user
 
 
-def get_active_plan_or_400(plan_name: str, db: Session) -> ServicePlan:
+def get_active_plan_or_400(plan_name: str, db: Session, organization_id: int) -> ServicePlan:
     plan = (
         db.query(ServicePlan)
-        .filter(ServicePlan.name == plan_name, ServicePlan.status == "active")
+        .filter(
+            ServicePlan.name == plan_name,
+            ServicePlan.organization_id == organization_id,
+            ServicePlan.status == "active",
+        )
         .first()
     )
     if not plan:
@@ -67,6 +75,7 @@ def ensure_username_available(username: str, db: Session, user_id: int | None = 
             detail="Username already exists",
         )
 
+
 def add_calendar_months(value: datetime, months: int) -> datetime:
     month_index = value.month - 1 + months
     year = value.year + month_index // 12
@@ -76,11 +85,7 @@ def add_calendar_months(value: datetime, months: int) -> datetime:
 
 
 def upsert_radcheck(db: Session, username: str, attribute: str, value: str, op: str = ":=") -> RadCheck:
-    row = db.query(RadCheck).filter(
-        RadCheck.username == username,
-        RadCheck.attribute == attribute,
-    ).first()
-
+    row = db.query(RadCheck).filter(RadCheck.username == username, RadCheck.attribute == attribute).first()
     if row:
         row.op = op
         row.value = value
@@ -92,11 +97,7 @@ def upsert_radcheck(db: Session, username: str, attribute: str, value: str, op: 
 
 
 def upsert_radreply(db: Session, username: str, attribute: str, value: str, op: str = ":=") -> RadReply:
-    row = db.query(RadReply).filter(
-        RadReply.username == username,
-        RadReply.attribute == attribute,
-    ).first()
-
+    row = db.query(RadReply).filter(RadReply.username == username, RadReply.attribute == attribute).first()
     if row:
         row.op = op
         row.value = value
@@ -108,11 +109,7 @@ def upsert_radreply(db: Session, username: str, attribute: str, value: str, op: 
 
 
 def remove_radcheck_attribute(db: Session, username: str, attribute: str) -> None:
-    rows = db.query(RadCheck).filter(
-        RadCheck.username == username,
-        RadCheck.attribute == attribute,
-    ).all()
-
+    rows = db.query(RadCheck).filter(RadCheck.username == username, RadCheck.attribute == attribute).all()
     for row in rows:
         db.delete(row)
 
@@ -123,7 +120,6 @@ def sync_radius_username(db: Session, old_username: str, new_username: str) -> N
 
     for row in db.query(RadCheck).filter(RadCheck.username == old_username).all():
         row.username = new_username
-
     for row in db.query(RadReply).filter(RadReply.username == old_username).all():
         row.username = new_username
 
@@ -141,7 +137,6 @@ def block_radius_authentication(db: Session, username: str) -> None:
 def delete_radius_provisioning(db: Session, username: str) -> None:
     for row in db.query(RadCheck).filter(RadCheck.username == username).all():
         db.delete(row)
-
     for row in db.query(RadReply).filter(RadReply.username == username).all():
         db.delete(row)
 
@@ -153,23 +148,19 @@ def apply_radius_lifecycle(
 ) -> None:
     if user.status == STATUS_ACTIVE:
         if plan is None:
-            plan = get_active_plan_or_400(user.service_plan, db)
-
+            plan = get_active_plan_or_400(user.service_plan, db, user.organization_id)
         provision_active_radius(db, user, plan)
 
         expiration_date = user.expiration_date
         if expiration_date and expiration_date.tzinfo is None:
             expiration_date = expiration_date.replace(tzinfo=timezone.utc)
-
         if expiration_date and expiration_date <= datetime.now(timezone.utc):
             block_radius_authentication(db, user.username)
-
         return
 
     if user.status == STATUS_SUSPENDED:
         if plan is None:
-            plan = get_active_plan_or_400(user.service_plan, db)
-
+            plan = get_active_plan_or_400(user.service_plan, db, user.organization_id)
         provision_active_radius(db, user, plan)
         block_radius_authentication(db, user.username)
         return
@@ -184,20 +175,29 @@ def apply_radius_lifecycle(
         detail="Invalid subscriber lifecycle status",
     )
 
+
 @router.get("/", response_model=List[UserResponse])
-def list_users(db: Session = Depends(get_db)) -> list[User]:
-    return db.query(User).order_by(User.id.asc()).all()
+def list_users(
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> list[User]:
+    return db.query(User).filter(
+        User.organization_id == organization.id
+    ).order_by(User.id.asc()).all()
 
 
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> User:
+def create_user(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> User:
     ensure_username_available(payload.username, db)
-    plan = get_active_plan_or_400(payload.service_plan, db)
-
+    plan = get_active_plan_or_400(payload.service_plan, db, organization.id)
     customer = db.query(Customer).filter(
-        Customer.id == payload.customer_id
+        Customer.id == payload.customer_id,
+        Customer.organization_id == organization.id,
     ).first()
-
     if not customer:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -205,6 +205,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> User:
         )
 
     user = User(
+        organization_id=organization.id,
         username=payload.username,
         password=payload.password,
         customer_id=customer.id,
@@ -232,8 +233,13 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> User:
 
 
 @router.put("/{user_id}", response_model=UserResponse)
-def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)) -> User:
-    user = get_user_or_404(user_id, db)
+def update_user(
+    user_id: int,
+    payload: UserUpdate,
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> User:
+    user = get_user_or_404(user_id, db, organization.id)
     update_data = payload.model_dump(exclude_unset=True)
     old_username = user.username
 
@@ -245,10 +251,10 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
         user.password = update_data["password"]
 
     if "service_plan" in update_data:
-        plan = get_active_plan_or_400(update_data["service_plan"], db)
+        plan = get_active_plan_or_400(update_data["service_plan"], db, organization.id)
         user.service_plan = plan.name
     else:
-        plan = get_active_plan_or_400(user.service_plan, db)
+        plan = get_active_plan_or_400(user.service_plan, db, organization.id)
 
     if "zone" in update_data:
         user.zone = update_data["zone"]
@@ -266,7 +272,9 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
 
     try:
         sync_radius_username(db, old_username, user.username)
+
         apply_radius_lifecycle(db, user, plan)
+
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -287,23 +295,23 @@ def recharge_user(
     user_id: int,
     payload: UserRecharge,
     db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
 ) -> User:
-    user = get_user_or_404(user_id, db)
-
+    user = get_user_or_404(user_id, db, organization.id)
     if user.status == STATUS_TERMINATED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Terminated PPPoE accounts cannot be recharged",
         )
-
     if not user.customer_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="PPPoE account must be linked to a CRM customer before recharge",
         )
-
-    customer = db.query(Customer).filter(Customer.id == user.customer_id).first()
-    if not customer:
+    if not db.query(Customer).filter(
+        Customer.id == user.customer_id,
+        Customer.organization_id == organization.id,
+    ).first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Linked CRM customer does not exist",
@@ -313,6 +321,7 @@ def recharge_user(
         db.query(ServicePlan)
         .filter(
             ServicePlan.id == payload.plan_id,
+            ServicePlan.organization_id == organization.id,
             ServicePlan.status == "active",
         )
         .first()
@@ -329,27 +338,23 @@ def recharge_user(
         if user.expiration_date and user.expiration_date > now
         else now
     )
-
     try:
         user.service_plan = plan.name
-        user.expiration_date = add_calendar_months(
-            extension_base,
-            payload.quantity,
-        )
+        user.expiration_date = add_calendar_months(extension_base, payload.quantity)
         user.status = STATUS_ACTIVE
         provision_active_radius(db, user, plan)
         db.commit()
     except Exception:
         db.rollback()
         raise
-
     db.refresh(user)
     return user
 
+
 @router.put("/{user_id}/suspend", response_model=UserSuspendResponse)
-def suspend_user(user_id: int, db: Session = Depends(get_db)) -> UserSuspendResponse:
-    user = get_user_or_404(user_id, db)
-    plan = get_active_plan_or_400(user.service_plan, db)
+def suspend_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserSuspendResponse:
+    user = get_user_or_404(user_id, db, organization.id)
+    plan = get_active_plan_or_400(user.service_plan, db, organization.id)
 
     try:
         user.status = STATUS_SUSPENDED
@@ -369,9 +374,9 @@ def suspend_user(user_id: int, db: Session = Depends(get_db)) -> UserSuspendResp
 
 
 @router.put("/{user_id}/activate", response_model=UserActivateResponse)
-def activate_user(user_id: int, db: Session = Depends(get_db)) -> UserActivateResponse:
-    user = get_user_or_404(user_id, db)
-    plan = get_active_plan_or_400(user.service_plan, db)
+def activate_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserActivateResponse:
+    user = get_user_or_404(user_id, db, organization.id)
+    plan = get_active_plan_or_400(user.service_plan, db, organization.id)
 
     try:
         user.status = STATUS_ACTIVE
@@ -391,9 +396,8 @@ def activate_user(user_id: int, db: Session = Depends(get_db)) -> UserActivateRe
 
 
 @router.put("/{user_id}/pending", response_model=UserPendingResponse)
-def mark_user_pending(user_id: int, db: Session = Depends(get_db)) -> UserPendingResponse:
-    user = get_user_or_404(user_id, db)
-
+def mark_user_pending(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserPendingResponse:
+    user = get_user_or_404(user_id, db, organization.id)
     try:
         user.status = STATUS_PENDING
         apply_radius_lifecycle(db, user)
@@ -401,7 +405,6 @@ def mark_user_pending(user_id: int, db: Session = Depends(get_db)) -> UserPendin
     except Exception:
         db.rollback()
         raise
-
     return UserPendingResponse(
         id=user.id,
         username=user.username,
@@ -412,9 +415,8 @@ def mark_user_pending(user_id: int, db: Session = Depends(get_db)) -> UserPendin
 
 
 @router.put("/{user_id}/terminate", response_model=UserTerminateResponse)
-def terminate_user(user_id: int, db: Session = Depends(get_db)) -> UserTerminateResponse:
-    user = get_user_or_404(user_id, db)
-
+def terminate_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserTerminateResponse:
+    user = get_user_or_404(user_id, db, organization.id)
     try:
         user.status = STATUS_TERMINATED
         apply_radius_lifecycle(db, user)
@@ -422,7 +424,6 @@ def terminate_user(user_id: int, db: Session = Depends(get_db)) -> UserTerminate
     except Exception:
         db.rollback()
         raise
-
     return UserTerminateResponse(
         id=user.id,
         username=user.username,
@@ -433,9 +434,9 @@ def terminate_user(user_id: int, db: Session = Depends(get_db)) -> UserTerminate
 
 
 @router.put("/{user_id}/plan", response_model=UserResponse)
-def change_user_plan(user_id: int, payload: UserPlanChange, db: Session = Depends(get_db)) -> User:
-    user = get_user_or_404(user_id, db)
-    plan = get_active_plan_or_400(payload.service_plan, db)
+def change_user_plan(user_id: int, payload: UserPlanChange, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> User:
+    user = get_user_or_404(user_id, db, organization.id)
+    plan = get_active_plan_or_400(payload.service_plan, db, organization.id)
 
     try:
         user.service_plan = plan.name
@@ -450,8 +451,8 @@ def change_user_plan(user_id: int, payload: UserPlanChange, db: Session = Depend
 
 
 @router.delete("/{user_id}", response_model=UserDeleteResponse)
-def delete_user(user_id: int, db: Session = Depends(get_db)) -> UserDeleteResponse:
-    user = get_user_or_404(user_id, db)
+def delete_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserDeleteResponse:
+    user = get_user_or_404(user_id, db, organization.id)
     response = UserDeleteResponse(
         id=user.id,
         username=user.username,

@@ -3,9 +3,11 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
-from app.models import Customer
+from app.models import Customer, Organization
 from app.schemas import CustomerCreate, CustomerResponse, CustomerUpdate
+from app.services.limits import enforce_limit
 
 
 router = APIRouter(prefix="/customers", tags=["CRM Customers"])
@@ -56,18 +58,36 @@ def apply_customer_payload(customer: Customer, payload: CustomerCreate | Custome
 
 
 @router.get("", response_model=List[CustomerResponse])
-def list_customers(db: Session = Depends(get_db)) -> list[CustomerResponse]:
-    customers = db.query(Customer).order_by(Customer.created_at.desc(), Customer.name.asc()).all()
+def list_customers(
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> list[CustomerResponse]:
+    customers = (
+        db.query(Customer)
+        .filter(Customer.organization_id == organization.id)
+        .order_by(Customer.created_at.desc(), Customer.name.asc())
+        .all()
+    )
     return [customer_to_response(customer) for customer in customers]
 
 
 @router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
-def create_customer(payload: CustomerCreate, db: Session = Depends(get_db)) -> CustomerResponse:
-    existing = db.query(Customer).filter(Customer.id == payload.id).first()
+def create_customer(
+    payload: CustomerCreate,
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> CustomerResponse:
+    organization_row = db.query(Organization).filter(Organization.id == organization.id).one()
+    enforce_limit(db, organization_row, "customers")
+    existing = (
+        db.query(Customer)
+        .filter(Customer.id == payload.id, Customer.organization_id == organization.id)
+        .first()
+    )
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Customer already exists")
 
-    customer = Customer(id=payload.id)
+    customer = Customer(id=payload.id, organization_id=organization.id)
     apply_customer_payload(customer, payload)
     db.add(customer)
     db.commit()
@@ -76,16 +96,33 @@ def create_customer(payload: CustomerCreate, db: Session = Depends(get_db)) -> C
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
-def get_customer(customer_id: str, db: Session = Depends(get_db)) -> CustomerResponse:
-    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+def get_customer(
+    customer_id: str,
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> CustomerResponse:
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id, Customer.organization_id == organization.id)
+        .first()
+    )
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
     return customer_to_response(customer)
 
 
 @router.put("/{customer_id}", response_model=CustomerResponse)
-def update_customer(customer_id: str, payload: CustomerUpdate, db: Session = Depends(get_db)) -> CustomerResponse:
-    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+def update_customer(
+    customer_id: str,
+    payload: CustomerUpdate,
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> CustomerResponse:
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id, Customer.organization_id == organization.id)
+        .first()
+    )
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
@@ -96,8 +133,16 @@ def update_customer(customer_id: str, payload: CustomerUpdate, db: Session = Dep
 
 
 @router.delete("/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_customer(customer_id: str, db: Session = Depends(get_db)) -> None:
-    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+def delete_customer(
+    customer_id: str,
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> None:
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id, Customer.organization_id == organization.id)
+        .first()
+    )
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 

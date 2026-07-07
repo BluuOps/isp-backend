@@ -1,0 +1,2 @@
+customer_name,phone,email,address,customer_type,location,username,password,plan,zone,expiration_date,status,static_ip,onu_serial,olt_name,pon_port,comment
+Example Customer,+2348000000000,customer@example.com,"123 Example Street, Lagos",individual,"6.5244,3.3792",example_user,CHANGE_ME,Core 10/10,Lekki Core,2026-12-31,active,,ONU123456,OLT HQ Core,1/1/1,Template row - replace before import

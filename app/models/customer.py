@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -8,6 +8,7 @@ class Customer(Base):
     __tablename__ = "customers"
 
     id = Column(String(100), primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
     tenant_id = Column(String(100), nullable=False, index=True)
     name = Column(String(150), nullable=False, index=True)
     customer_type = Column(String(50), nullable=False, default="individual")
