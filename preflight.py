@@ -15,6 +15,7 @@ def main() -> None:
     required_routes = {
         ("GET", "/health"),
         ("GET", "/health/ready"),
+        ("GET", "/release"),
         ("GET", "/platform/dashboard"),
         ("GET", "/platform/organizations"),
         ("POST", "/platform/organizations"),
