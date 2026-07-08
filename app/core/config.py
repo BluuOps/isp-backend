@@ -32,6 +32,8 @@ class Settings:
     smtp_url: str | None = os.getenv("SMTP_URL")
     jwt_secret: str | None = os.getenv("JWT_SECRET")
     platform_admin_api_key: str | None = os.getenv("PLATFORM_ADMIN_API_KEY")
+    internal_admin_email: str | None = os.getenv("INTERNAL_ADMIN_EMAIL")
+    internal_admin_password: str | None = os.getenv("INTERNAL_ADMIN_PASSWORD")
     upload_path: str = os.getenv("UPLOAD_PATH", "/var/lib/radiusfiber/uploads")
 
 

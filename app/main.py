@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import settings
 from app.core.errors import ApiError, api_error_handler, integrity_error_handler
 from app.database import engine
-from app.routers import billing, customers, organization, plans, platform, radius_sessions, release, users
+from app.routers import auth, billing, customers, organization, plans, platform, radius_sessions, release, users
 
 
 app = FastAPI(
@@ -28,6 +28,7 @@ app.include_router(customers.router)
 app.include_router(radius_sessions.router)
 app.include_router(platform.router)
 app.include_router(organization.router)
+app.include_router(auth.router)
 app.include_router(release.router)
 
 

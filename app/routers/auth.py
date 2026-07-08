@@ -1,0 +1,180 @@
+import base64
+import hashlib
+import hmac
+import json
+import secrets
+import time
+from typing import Any
+
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.database import get_db
+from app.models.organization import Organization
+
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+TOKEN_TTL_SECONDS = 12 * 60 * 60
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    tenant_id: str = Field(min_length=1)
+
+
+class AuthUser(BaseModel):
+    id: str
+    email: str
+    fullName: str
+    role: str
+    tenantId: str
+    permissions: dict[str, bool]
+
+
+class TenantBranding(BaseModel):
+    tenantId: str
+    ispName: str
+    logoUrl: str | None = None
+    primaryColor: str | None = None
+
+
+class AuthResponse(BaseModel):
+    token: str
+    user: AuthUser
+    branding: TenantBranding
+
+
+def _require_internal_auth_config() -> tuple[str, str, str]:
+    if not settings.internal_admin_email or not settings.internal_admin_password or not settings.jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal authentication bridge is not configured",
+        )
+    return settings.internal_admin_email, settings.internal_admin_password, settings.jwt_secret
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(raw: str) -> bytes:
+    return base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+
+
+def _sign(payload: str, secret: str) -> str:
+    return _b64url_encode(hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest())
+
+
+def _create_token(payload: dict[str, Any], secret: str) -> str:
+    encoded_payload = _b64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    return f"{encoded_payload}.{_sign(encoded_payload, secret)}"
+
+
+def _decode_token(token: str, secret: str) -> dict[str, Any]:
+    try:
+        encoded_payload, signature = token.split(".", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+
+    expected = _sign(encoded_payload, secret)
+    if not secrets.compare_digest(signature, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    try:
+        payload = json.loads(_b64url_decode(encoded_payload))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+
+    expires_at = int(payload.get("exp", 0))
+    if expires_at < int(time.time()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+    return payload
+
+
+def _get_organization(db: Session, tenant_id: str) -> Organization:
+    organization = db.query(Organization).filter(Organization.slug == tenant_id).first()
+    if not organization and tenant_id == settings.default_organization_slug:
+        organization = db.query(Organization).filter(Organization.slug == settings.default_organization_slug).first()
+    if not organization:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid tenant")
+    if organization.status != "active":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tenant is not active")
+    return organization
+
+
+def _permissions() -> dict[str, bool]:
+    return {
+        "radius_access": True,
+        "disconnect_user": True,
+        "create_pppoe": True,
+        "view_customers": True,
+        "delete_customer": True,
+        "billing_access": True,
+        "settings_access": True,
+    }
+
+
+def _auth_response(email: str, organization: Organization, token: str) -> AuthResponse:
+    return AuthResponse(
+        token=token,
+        user=AuthUser(
+            id="internal-admin",
+            email=email,
+            fullName="Internal Administrator",
+            role="tenant_admin",
+            tenantId=organization.slug,
+            permissions=_permissions(),
+        ),
+        branding=TenantBranding(
+            tenantId=organization.slug,
+            ispName=organization.name,
+            logoUrl=organization.logo,
+            primaryColor="#2563eb",
+        ),
+    )
+
+
+@router.post("/login", response_model=AuthResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
+    # Temporary RC1.1 internal auth bridge. Replace with full organization/customer auth in Phase 3.
+    configured_email, configured_password, secret = _require_internal_auth_config()
+    if not secrets.compare_digest(payload.email.lower(), configured_email.lower()) or not secrets.compare_digest(
+        payload.password,
+        configured_password,
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    organization = _get_organization(db, payload.tenant_id)
+    now = int(time.time())
+    token = _create_token(
+        {
+            "sub": "internal-admin",
+            "email": configured_email,
+            "tenant_id": organization.slug,
+            "role": "tenant_admin",
+            "iat": now,
+            "exp": now + TOKEN_TTL_SECONDS,
+        },
+        secret,
+    )
+    return _auth_response(configured_email, organization, token)
+
+
+@router.get("/me", response_model=AuthResponse)
+def me(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> AuthResponse:
+    _, _, secret = _require_internal_auth_config()
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+    payload = _decode_token(authorization.split(" ", 1)[1], secret)
+    organization = _get_organization(db, str(payload.get("tenant_id", settings.default_organization_slug)))
+    token = authorization.split(" ", 1)[1]
+    return _auth_response(str(payload.get("email", settings.internal_admin_email)), organization, token)
+
+
+@router.post("/logout")
+def logout() -> dict[str, str]:
+    return {"status": "ok"}

@@ -1,1 +1,1 @@
-from app.routers import billing, customers, organization, plans, platform, radius_sessions, release, users
+from app.routers import auth, billing, customers, organization, plans, platform, radius_sessions, release, users
