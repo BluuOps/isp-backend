@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.errors import conflict
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import ServicePlan, User
@@ -126,10 +127,17 @@ def delete_plan(
         .first()
     )
     if users_on_plan:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot delete a service plan assigned to non-terminated subscribers",
+        raise conflict(
+            "service_plan_has_active_subscribers",
+            "Cannot delete a service plan assigned to non-terminated subscribers.",
         )
 
-    db.delete(plan)
-    db.commit()
+    try:
+        db.delete(plan)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise conflict(
+            "service_plan_has_linked_records",
+            "Cannot delete a service plan while linked subscriber records exist.",
+        ) from exc

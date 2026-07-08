@@ -3,8 +3,10 @@ import shutil
 
 from fastapi import FastAPI
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
+from app.core.errors import ApiError, api_error_handler, integrity_error_handler
 from app.database import engine
 from app.routers import billing, customers, organization, plans, platform, radius_sessions, users
 
@@ -14,6 +16,9 @@ app = FastAPI(
     description="Backend API for ISP subscriber and RADIUS provisioning workflows.",
     version="0.1.0",
 )
+
+app.add_exception_handler(ApiError, api_error_handler)
+app.add_exception_handler(IntegrityError, integrity_error_handler)
 
 
 app.include_router(users.router)

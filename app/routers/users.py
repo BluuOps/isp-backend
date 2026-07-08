@@ -8,8 +8,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.tenant import OrganizationContext, get_organization_context
+from app.core.errors import conflict
 from app.database import get_db
-from app.models import Customer, RadCheck, RadReply, ServicePlan, User
+from app.models import BillingAccount, Customer, RadCheck, RadReply, ServicePlan, User
 from app.schemas import (
     UserActivateResponse,
     UserCreate,
@@ -139,6 +140,30 @@ def delete_radius_provisioning(db: Session, username: str) -> None:
         db.delete(row)
     for row in db.query(RadReply).filter(RadReply.username == username).all():
         db.delete(row)
+
+
+def enforce_user_delete_policy(db: Session, user: User) -> None:
+    if user.status != STATUS_TERMINATED:
+        raise conflict(
+            "user_not_terminated",
+            "Terminate subscriber before deletion.",
+        )
+
+    if db.query(BillingAccount).filter(BillingAccount.user_id == user.id).first():
+        raise conflict(
+            "user_has_billing_account",
+            "Remove or archive the subscriber billing account before deletion.",
+        )
+
+    radius_rows = (
+        db.query(RadCheck).filter(RadCheck.username == user.username).first()
+        or db.query(RadReply).filter(RadReply.username == user.username).first()
+    )
+    if radius_rows:
+        raise conflict(
+            "user_has_radius_records",
+            "Remove dependent RADIUS provisioning records before deletion.",
+        )
 
 
 def apply_radius_lifecycle(
@@ -453,18 +478,21 @@ def change_user_plan(user_id: int, payload: UserPlanChange, db: Session = Depend
 @router.delete("/{user_id}", response_model=UserDeleteResponse)
 def delete_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserDeleteResponse:
     user = get_user_or_404(user_id, db, organization.id)
+    enforce_user_delete_policy(db, user)
     response = UserDeleteResponse(
         id=user.id,
         username=user.username,
-        message="Subscriber and active RADIUS provisioning rows deleted",
+        message="Subscriber deleted",
     )
 
     try:
-        delete_radius_provisioning(db, user.username)
         db.delete(user)
         db.commit()
-    except Exception:
+    except IntegrityError as exc:
         db.rollback()
-        raise
+        raise conflict(
+            "user_has_linked_records",
+            "Terminate subscriber and remove dependent records before deletion.",
+        ) from exc
 
     return response

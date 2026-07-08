@@ -90,6 +90,64 @@ curl http://127.0.0.1:8000/users/
 curl http://127.0.0.1:8000/plans
 ```
 
+## Deletion lifecycle
+
+RadiusFiber treats deletes as operational lifecycle events, not raw database row
+removal. API handlers must return business-safe responses instead of exposing
+database integrity errors.
+
+### Subscribers / PPPoE users
+
+`DELETE /users/{id}` is only allowed when the subscriber is already terminated
+and has no linked billing or RADIUS provisioning rows.
+
+Otherwise the API returns `409 Conflict` with a structured response such as:
+
+```json
+{
+  "error": "user_has_billing_account",
+  "message": "Remove or archive the subscriber billing account before deletion."
+}
+```
+
+Use suspend, terminate, recharge, password reset, and RADIUS lifecycle endpoints
+for normal operations. Hard deletion is reserved for records that have already
+been detached from billing and RADIUS state.
+
+### Customers
+
+`DELETE /customers/{id}` is blocked while linked PPPoE subscribers exist.
+Return `409 Conflict` with:
+
+```json
+{
+  "error": "customer_has_subscribers",
+  "message": "Remove or reassign linked PPPoE subscribers before deleting this customer."
+}
+```
+
+### Service plans
+
+`DELETE /plans/{id}` is blocked while non-terminated subscribers use the plan.
+Return `409 Conflict` with:
+
+```json
+{
+  "error": "service_plan_has_active_subscribers",
+  "message": "Cannot delete a service plan assigned to non-terminated subscribers."
+}
+```
+
+### SaaS/commercial objects
+
+- Default organization (`smart-fiber`) is not hard deleted; platform deletion
+  requests cancel/suspend non-default organizations.
+- Organization staff can be deleted except when it would remove the last active
+  organization admin.
+- Feature flags are configuration records; prefer updates/disablement over
+  deletion.
+- Audit logs are immutable and should not be deleted by normal API flows.
+
 ## Rollback
 
 The deploy script prints the backup directory it created under:

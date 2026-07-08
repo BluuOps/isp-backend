@@ -1,11 +1,13 @@
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.errors import conflict
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
-from app.models import Customer, Organization
+from app.models import Customer, Organization, User
 from app.schemas import CustomerCreate, CustomerResponse, CustomerUpdate
 from app.services.limits import enforce_limit
 
@@ -146,5 +148,23 @@ def delete_customer(
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
-    db.delete(customer)
-    db.commit()
+    linked_user = (
+        db.query(User)
+        .filter(User.customer_id == customer.id, User.organization_id == organization.id)
+        .first()
+    )
+    if linked_user:
+        raise conflict(
+            "customer_has_subscribers",
+            "Remove or reassign linked PPPoE subscribers before deleting this customer.",
+        )
+
+    try:
+        db.delete(customer)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise conflict(
+            "customer_has_linked_records",
+            "Remove linked subscribers or related records before deleting this customer.",
+        ) from exc
