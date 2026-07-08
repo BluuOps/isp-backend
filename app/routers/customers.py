@@ -15,10 +15,10 @@ from app.services.limits import enforce_limit
 router = APIRouter(prefix="/customers", tags=["CRM Customers"])
 
 
-def customer_to_response(customer: Customer) -> CustomerResponse:
+def customer_to_response(customer: Customer, organization: OrganizationContext) -> CustomerResponse:
     return CustomerResponse(
         id=customer.id,
-        tenantId=customer.tenant_id,
+        tenantId=organization.slug,
         name=customer.name,
         customerType=customer.customer_type,
         email=customer.email,
@@ -38,8 +38,12 @@ def customer_to_response(customer: Customer) -> CustomerResponse:
     )
 
 
-def apply_customer_payload(customer: Customer, payload: CustomerCreate | CustomerUpdate) -> None:
-    customer.tenant_id = payload.tenantId
+def apply_customer_payload(
+    customer: Customer,
+    payload: CustomerCreate | CustomerUpdate,
+    organization: OrganizationContext,
+) -> None:
+    customer.tenant_id = organization.slug
     customer.name = payload.name
     customer.customer_type = payload.customerType
     customer.email = payload.email
@@ -70,7 +74,7 @@ def list_customers(
         .order_by(Customer.created_at.desc(), Customer.name.asc())
         .all()
     )
-    return [customer_to_response(customer) for customer in customers]
+    return [customer_to_response(customer, organization) for customer in customers]
 
 
 @router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
@@ -90,11 +94,11 @@ def create_customer(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Customer already exists")
 
     customer = Customer(id=payload.id, organization_id=organization.id)
-    apply_customer_payload(customer, payload)
+    apply_customer_payload(customer, payload, organization)
     db.add(customer)
     db.commit()
     db.refresh(customer)
-    return customer_to_response(customer)
+    return customer_to_response(customer, organization)
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
@@ -110,7 +114,7 @@ def get_customer(
     )
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
-    return customer_to_response(customer)
+    return customer_to_response(customer, organization)
 
 
 @router.put("/{customer_id}", response_model=CustomerResponse)
@@ -128,10 +132,10 @@ def update_customer(
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
-    apply_customer_payload(customer, payload)
+    apply_customer_payload(customer, payload, organization)
     db.commit()
     db.refresh(customer)
-    return customer_to_response(customer)
+    return customer_to_response(customer, organization)
 
 
 @router.delete("/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
