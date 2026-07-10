@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.database import get_db
 from app.models.organization import Organization
+from app.services.audit import record_audit
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -161,6 +162,16 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
         },
         secret,
     )
+    record_audit(
+        db,
+        organization_id=organization.id,
+        actor=configured_email,
+        action="auth.login",
+        target_type="auth",
+        target_id="internal-admin",
+        new_value={"tenant_id": organization.slug, "mode": "temporary_internal_bridge"},
+    )
+    db.commit()
     return _auth_response(configured_email, organization, token)
 
 

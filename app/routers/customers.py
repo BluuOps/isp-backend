@@ -9,6 +9,7 @@ from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import Customer, Organization, User
 from app.schemas import CustomerCreate, CustomerResponse, CustomerUpdate
+from app.services.audit import record_audit
 from app.services.limits import enforce_limit
 
 
@@ -96,6 +97,15 @@ def create_customer(
     customer = Customer(id=payload.id, organization_id=organization.id)
     apply_customer_payload(customer, payload, organization)
     db.add(customer)
+    record_audit(
+        db,
+        organization_id=organization.id,
+        actor="internal-admin",
+        action="customer.created",
+        target_type="customer",
+        target_id=customer.id,
+        new_value={"name": customer.name, "email": customer.email, "phone": customer.phone},
+    )
     db.commit()
     db.refresh(customer)
     return customer_to_response(customer, organization)
@@ -132,7 +142,18 @@ def update_customer(
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
+    old = {"name": customer.name, "email": customer.email, "phone": customer.phone, "account_status": customer.account_status}
     apply_customer_payload(customer, payload, organization)
+    record_audit(
+        db,
+        organization_id=organization.id,
+        actor="internal-admin",
+        action="customer.updated",
+        target_type="customer",
+        target_id=customer.id,
+        old_value=old,
+        new_value={"name": customer.name, "email": customer.email, "phone": customer.phone, "account_status": customer.account_status},
+    )
     db.commit()
     db.refresh(customer)
     return customer_to_response(customer, organization)
@@ -158,12 +179,32 @@ def delete_customer(
         .first()
     )
     if linked_user:
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="customer.delete_blocked",
+            target_type="customer",
+            target_id=customer.id,
+            old_value={"linked_user_id": linked_user.id, "linked_username": linked_user.username},
+            success=False,
+        )
+        db.commit()
         raise conflict(
             "customer_has_subscribers",
             "Remove or reassign linked PPPoE subscribers before deleting this customer.",
         )
 
     try:
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="customer.deleted",
+            target_type="customer",
+            target_id=customer.id,
+            old_value={"name": customer.name, "email": customer.email, "phone": customer.phone},
+        )
         db.delete(customer)
         db.commit()
     except IntegrityError as exc:

@@ -1,0 +1,27 @@
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.sql import func
+
+from app.database import Base
+
+
+class PaymentTransaction(Base):
+    __tablename__ = "payment_transactions"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "transaction_reference", name="uq_payment_org_transaction_reference"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    customer_id = Column(String(100), ForeignKey("customers.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", onupdate="CASCADE", ondelete="SET NULL"), nullable=True, index=True)
+    transaction_reference = Column(String(120), nullable=False, index=True)
+    external_reference = Column(String(255), nullable=True, index=True)
+    amount = Column(Numeric(12, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="NGN")
+    payment_method = Column(String(50), nullable=False)
+    payment_status = Column(String(30), nullable=False, default="pending", index=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+    created_by = Column(String(255), nullable=True)
+    notes = Column(Text, nullable=True)

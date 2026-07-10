@@ -15,6 +15,7 @@ from app.schemas.radius_session import (
     RadiusDisconnectResponse,
     RadiusSessionResponse,
 )
+from app.services.audit import record_audit
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,16 @@ def disconnect_session(
         raise
 
     if not active_session:
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.disconnect_blocked_auth",
+            target_type="user",
+            target_id=account.username,
+            new_value={"active_session": False, "status": account.status},
+        )
+        db.commit()
         return RadiusDisconnectResponse(
             username=account.username,
             session_id=latest_session.acctsessionid,
@@ -225,6 +236,16 @@ def disconnect_session(
         payload.username,
         active_session.acctsessionid,
     )
+    record_audit(
+        db,
+        organization_id=organization.id,
+        actor="internal-admin",
+        action="pppoe.disconnected",
+        target_type="radius_session",
+        target_id=active_session.acctsessionid,
+        new_value={"username": account.username, "nas_ip_address": str(active_session.nasipaddress)},
+    )
+    db.commit()
 
     return RadiusDisconnectResponse(
         username=payload.username,

@@ -23,6 +23,7 @@ from app.schemas import (
     UserTerminateResponse,
     UserUpdate,
 )
+from app.services.audit import record_audit
 
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -242,6 +243,15 @@ def create_user(
     try:
         db.add(user)
         apply_radius_lifecycle(db, user, plan)
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.created",
+            target_type="user",
+            target_id=user.username,
+            new_value={"customer_id": customer.id, "service_plan": plan.name, "status": user.status},
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -267,6 +277,7 @@ def update_user(
     user = get_user_or_404(user_id, db, organization.id)
     update_data = payload.model_dump(exclude_unset=True)
     old_username = user.username
+    old = {"username": user.username, "service_plan": user.service_plan, "status": user.status, "zone": user.zone}
 
     if "username" in update_data:
         ensure_username_available(update_data["username"], db, user_id=user.id)
@@ -299,6 +310,16 @@ def update_user(
         sync_radius_username(db, old_username, user.username)
 
         apply_radius_lifecycle(db, user, plan)
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.updated",
+            target_type="user",
+            target_id=str(user.id),
+            old_value=old,
+            new_value={"username": user.username, "service_plan": user.service_plan, "status": user.status, "zone": user.zone},
+        )
 
         db.commit()
     except IntegrityError as exc:
@@ -358,6 +379,7 @@ def recharge_user(
         )
 
     now = datetime.now(timezone.utc)
+    old = {"service_plan": user.service_plan, "expiration_date": user.expiration_date.isoformat() if user.expiration_date else None, "status": user.status}
     extension_base = (
         user.expiration_date
         if user.expiration_date and user.expiration_date > now
@@ -368,6 +390,16 @@ def recharge_user(
         user.expiration_date = add_calendar_months(extension_base, payload.quantity)
         user.status = STATUS_ACTIVE
         provision_active_radius(db, user, plan)
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.recharged",
+            target_type="user",
+            target_id=str(user.id),
+            old_value=old,
+            new_value={"service_plan": user.service_plan, "expiration_date": user.expiration_date.isoformat(), "quantity": payload.quantity},
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -382,8 +414,19 @@ def suspend_user(user_id: int, db: Session = Depends(get_db), organization: Orga
     plan = get_active_plan_or_400(user.service_plan, db, organization.id)
 
     try:
+        old_status = user.status
         user.status = STATUS_SUSPENDED
         apply_radius_lifecycle(db, user, plan)
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.suspended",
+            target_type="user",
+            target_id=str(user.id),
+            old_value={"status": old_status},
+            new_value={"status": user.status},
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -404,8 +447,19 @@ def activate_user(user_id: int, db: Session = Depends(get_db), organization: Org
     plan = get_active_plan_or_400(user.service_plan, db, organization.id)
 
     try:
+        old_status = user.status
         user.status = STATUS_ACTIVE
         apply_radius_lifecycle(db, user, plan)
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.reconnected",
+            target_type="user",
+            target_id=str(user.id),
+            old_value={"status": old_status},
+            new_value={"status": user.status},
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -424,8 +478,19 @@ def activate_user(user_id: int, db: Session = Depends(get_db), organization: Org
 def mark_user_pending(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserPendingResponse:
     user = get_user_or_404(user_id, db, organization.id)
     try:
+        old_status = user.status
         user.status = STATUS_PENDING
         apply_radius_lifecycle(db, user)
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.pending",
+            target_type="user",
+            target_id=str(user.id),
+            old_value={"status": old_status},
+            new_value={"status": user.status},
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -443,8 +508,19 @@ def mark_user_pending(user_id: int, db: Session = Depends(get_db), organization:
 def terminate_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserTerminateResponse:
     user = get_user_or_404(user_id, db, organization.id)
     try:
+        old_status = user.status
         user.status = STATUS_TERMINATED
         apply_radius_lifecycle(db, user)
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.terminated",
+            target_type="user",
+            target_id=str(user.id),
+            old_value={"status": old_status},
+            new_value={"status": user.status},
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -464,8 +540,19 @@ def change_user_plan(user_id: int, payload: UserPlanChange, db: Session = Depend
     plan = get_active_plan_or_400(payload.service_plan, db, organization.id)
 
     try:
+        old_plan = user.service_plan
         user.service_plan = plan.name
         apply_radius_lifecycle(db, user, plan)
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.plan_changed",
+            target_type="user",
+            target_id=str(user.id),
+            old_value={"service_plan": old_plan},
+            new_value={"service_plan": user.service_plan},
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -486,6 +573,15 @@ def delete_user(user_id: int, db: Session = Depends(get_db), organization: Organ
     )
 
     try:
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.deleted",
+            target_type="user",
+            target_id=str(user.id),
+            old_value={"username": user.username, "customer_id": user.customer_id, "service_plan": user.service_plan},
+        )
         db.delete(user)
         db.commit()
     except IntegrityError as exc:

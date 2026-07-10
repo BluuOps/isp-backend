@@ -1,15 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, Response
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import (
+    AuditLog,
     FeatureFlag,
     NotificationSetting,
     Organization,
     OrganizationStaff,
     Subscription,
 )
+from app.schemas import AuditLogListResponse
 from app.schemas.management import (
     NotificationSettingsUpdate,
     OrganizationResponse,
@@ -136,3 +140,29 @@ def get_feature_flags(db: Session = Depends(get_db), context: OrganizationContex
     overrides = {flag.key: flag for flag in db.query(FeatureFlag).filter(FeatureFlag.organization_id == context.id).all()}
     keys = sorted(set(global_flags) | set(overrides))
     return [{"key": key, "enabled": (overrides.get(key) or global_flags[key]).enabled, "configuration": (overrides.get(key) or global_flags[key]).configuration} for key in keys]
+
+
+@router.get("/audit-logs", response_model=AuditLogListResponse)
+def list_audit_logs(
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    action: str | None = Query(default=None, max_length=100),
+    actor: str | None = Query(default=None, max_length=255),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    context: OrganizationContext = Depends(get_organization_context),
+) -> AuditLogListResponse:
+    query = db.query(AuditLog).filter(AuditLog.organization_id == context.id)
+    if date_from:
+        query = query.filter(AuditLog.created_at >= date_from)
+    if date_to:
+        query = query.filter(AuditLog.created_at <= date_to)
+    if action:
+        query = query.filter(AuditLog.action == action)
+    if actor:
+        query = query.filter(AuditLog.actor == actor)
+
+    total = query.count()
+    items = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).offset(offset).limit(limit).all()
+    return AuditLogListResponse(items=items, total=total, limit=limit, offset=offset)

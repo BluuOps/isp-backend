@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from app import app
 from app.database import Base
-from app.models import RadAcct, RadCheck, RadReply, ServicePlan, User
-from app.schemas import RadiusDisconnectRequest, RadiusSessionResponse, ServicePlanCreate, UserCreate
+from app.models import PaymentTransaction, RadAcct, RadCheck, RadReply, ServicePlan, User
+from app.schemas import PaymentCreate, PaymentResponse, RadiusDisconnectRequest, RadiusSessionResponse, ServicePlanCreate, UserCreate
 
 
 def main() -> None:
@@ -40,6 +40,12 @@ def main() -> None:
         ("DELETE", "/organization/staff/{staff_id}"),
         ("GET", "/organization/subscription"),
         ("GET", "/organization/feature-flags"),
+        ("GET", "/organization/audit-logs"),
+        ("GET", "/payments"),
+        ("GET", "/payments/summary"),
+        ("GET", "/payments/export"),
+        ("GET", "/payments/{payment_id}"),
+        ("POST", "/payments"),
         ("GET", "/users/"),
         ("POST", "/users/"),
         ("PUT", "/users/{user_id}"),
@@ -91,6 +97,7 @@ def main() -> None:
         "organization_roles",
         "organization_billing_profiles",
         "notification_settings",
+        "payment_transactions",
         "platform",
         "radacct",
         "radcheck",
@@ -116,6 +123,7 @@ def main() -> None:
         RadCheck.__name__,
         RadReply.__name__,
         RadAcct.__name__,
+        PaymentTransaction.__name__,
     )
     print(
         "Schemas:",
@@ -123,6 +131,8 @@ def main() -> None:
         ServicePlanCreate.__name__,
         RadiusSessionResponse.__name__,
         RadiusDisconnectRequest.__name__,
+        PaymentCreate.__name__,
+        PaymentResponse.__name__,
     )
 
 

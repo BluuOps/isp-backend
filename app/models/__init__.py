@@ -7,6 +7,7 @@ from app.models.organization import Organization
 from app.models.organization_billing_profile import OrganizationBillingProfile
 from app.models.organization_role import OrganizationRole
 from app.models.organization_staff import OrganizationStaff
+from app.models.payment import PaymentTransaction
 from app.models.platform import Platform
 from app.models.radacct import RadAcct
 from app.models.radius import RadCheck, RadReply
@@ -25,6 +26,7 @@ __all__ = [
     "OrganizationBillingProfile",
     "OrganizationRole",
     "OrganizationStaff",
+    "PaymentTransaction",
     "NotificationSetting",
     "Platform",
     "RadAcct",
