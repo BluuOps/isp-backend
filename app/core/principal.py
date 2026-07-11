@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import secrets
+import time
+from typing import Any, Literal
+
+from fastapi import Header, HTTPException, status
+from pydantic import BaseModel
+
+from app.core.config import settings
+
+PrincipalType = Literal["platform_admin", "organization_staff", "customer", "system"]
+
+
+class Principal(BaseModel):
+    sub: str
+    principal_type: PrincipalType
+    organization_id: int | None = None
+    organization_slug: str | None = None
+    customer_id: str | None = None
+    roles: list[str] = []
+    permissions: list[str] = []
+    email: str | None = None
+
+
+def _require_jwt_secret() -> str:
+    if not settings.jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="JWT signing secret is not configured",
+        )
+    return settings.jwt_secret
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(raw: str) -> bytes:
+    return base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+
+
+def _sign(payload: str, secret: str) -> str:
+    return _b64url_encode(hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest())
+
+
+def create_principal_token(payload: dict[str, Any], ttl_seconds: int = 12 * 60 * 60) -> str:
+    now = int(time.time())
+    claims = {"iat": now, "exp": now + ttl_seconds, **payload}
+    encoded_payload = _b64url_encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    return f"{encoded_payload}.{_sign(encoded_payload, _require_jwt_secret())}"
+
+
+def decode_principal_token(token: str) -> dict[str, Any]:
+    try:
+        encoded_payload, signature = token.split(".", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+
+    expected = _sign(encoded_payload, _require_jwt_secret())
+    if not secrets.compare_digest(signature, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    try:
+        payload = json.loads(_b64url_decode(encoded_payload))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+
+    if int(payload.get("exp", 0)) < int(time.time()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+    return payload
+
+
+def bearer_payload(authorization: str | None) -> dict[str, Any] | None:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    return decode_principal_token(authorization.split(" ", 1)[1])
+
+
+def reject_customer_principal(authorization: str | None = Header(default=None)) -> None:
+    payload = bearer_payload(authorization)
+    if payload and payload.get("principal_type") == "customer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Customer portal tokens cannot access organization or platform APIs",
+        )

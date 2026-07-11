@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import conflict
+from app.core.principal import reject_customer_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import Customer, Organization, User
@@ -13,7 +14,7 @@ from app.services.audit import record_audit
 from app.services.limits import enforce_limit
 
 
-router = APIRouter(prefix="/customers", tags=["CRM Customers"])
+router = APIRouter(prefix="/customers", tags=["CRM Customers"], dependencies=[Depends(reject_customer_principal)])
 
 
 def customer_to_response(customer: Customer, organization: OrganizationContext) -> CustomerResponse:

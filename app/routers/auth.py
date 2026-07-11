@@ -154,7 +154,10 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
     token = _create_token(
         {
             "sub": "internal-admin",
+            "principal_type": "organization_staff",
             "email": configured_email,
+            "organization_id": organization.id,
+            "organization_slug": organization.slug,
             "tenant_id": organization.slug,
             "role": "tenant_admin",
             "iat": now,
@@ -166,6 +169,9 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
         db,
         organization_id=organization.id,
         actor=configured_email,
+        actor_type="organization_staff",
+        actor_id="internal-admin",
+        actor_label=configured_email,
         action="auth.login",
         target_type="auth",
         target_id="internal-admin",

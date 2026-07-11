@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
+from app.core.principal import reject_customer_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import (
@@ -27,7 +28,7 @@ from app.services.audit import record_audit
 from app.services.limits import enforce_limit
 from app.services.security import generate_temporary_password, hash_password
 
-router = APIRouter(prefix="/organization", tags=["Organization Management"])
+router = APIRouter(prefix="/organization", tags=["Organization Management"], dependencies=[Depends(reject_customer_principal)])
 
 
 def current_organization(db: Session, context: OrganizationContext) -> Organization:
@@ -148,6 +149,8 @@ def list_audit_logs(
     date_to: datetime | None = Query(default=None),
     action: str | None = Query(default=None, max_length=100),
     actor: str | None = Query(default=None, max_length=255),
+    actor_type: str | None = Query(default=None, max_length=50),
+    actor_id: str | None = Query(default=None, max_length=255),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -162,6 +165,10 @@ def list_audit_logs(
         query = query.filter(AuditLog.action == action)
     if actor:
         query = query.filter(AuditLog.actor == actor)
+    if actor_type:
+        query = query.filter(AuditLog.actor_type == actor_type)
+    if actor_id:
+        query = query.filter(AuditLog.actor_id == actor_id)
 
     total = query.count()
     items = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).offset(offset).limit(limit).all()

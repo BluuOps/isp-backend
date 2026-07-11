@@ -1,6 +1,7 @@
 from app.models.audit_log import AuditLog
 from app.models.billing import BillingAccount
 from app.models.customer import Customer
+from app.models.customer_portal_account import CustomerPortalAccount
 from app.models.feature_flag import FeatureFlag
 from app.models.notification_setting import NotificationSetting
 from app.models.organization import Organization
@@ -21,6 +22,7 @@ __all__ = [
     "AuditLog",
     "BillingAccount",
     "Customer",
+    "CustomerPortalAccount",
     "FeatureFlag",
     "Organization",
     "OrganizationBillingProfile",

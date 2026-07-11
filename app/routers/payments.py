@@ -12,14 +12,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import conflict
+from app.core.principal import reject_customer_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
-from app.models import BillingAccount, Customer, PaymentTransaction, User
+from app.models import BillingAccount, Customer, OrganizationStaff, PaymentTransaction, User
 from app.schemas import PaymentCreate, PaymentResponse, PaymentSummary
 from app.services.audit import record_audit
 
 
-router = APIRouter(prefix="/payments", tags=["Payments"])
+router = APIRouter(prefix="/payments", tags=["Payments"], dependencies=[Depends(reject_customer_principal)])
 
 
 def _utc_now() -> datetime:
@@ -89,6 +90,27 @@ def _validate_customer_and_user(payload: PaymentCreate, db: Session, organizatio
     if user.customer_id and user.customer_id != customer.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected PPPoE user is linked to a different customer")
 
+    if payload.created_by_staff_id and payload.created_by_customer_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment cannot have both staff and customer creators")
+
+    if payload.created_by_staff_id:
+        staff = (
+            db.query(OrganizationStaff)
+            .filter(OrganizationStaff.id == payload.created_by_staff_id, OrganizationStaff.organization_id == organization_id)
+            .first()
+        )
+        if not staff:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Recording staff member does not exist")
+
+    if payload.created_by_customer_id:
+        creator_customer = (
+            db.query(Customer)
+            .filter(Customer.id == payload.created_by_customer_id, Customer.organization_id == organization_id)
+            .first()
+        )
+        if not creator_customer:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Recording customer does not exist")
+
 
 def _payment_query(db: Session, organization_id: int):
     return db.query(PaymentTransaction).filter(PaymentTransaction.organization_id == organization_id)
@@ -155,6 +177,10 @@ def export_payments(
         "payment_status",
         "paid_at",
         "created_at",
+        "created_by_staff_id",
+        "created_by_customer_id",
+        "created_by_principal_type",
+        "recorded_by_label",
         "created_by",
         "notes",
     ])
@@ -171,6 +197,10 @@ def export_payments(
             row.payment_status,
             row.paid_at.isoformat() if row.paid_at else "",
             row.created_at.isoformat() if row.created_at else "",
+            row.created_by_staff_id or "",
+            row.created_by_customer_id or "",
+            row.created_by_principal_type or "",
+            row.recorded_by_label or "",
             row.created_by or "",
             row.notes or "",
         ])
@@ -223,6 +253,10 @@ def create_payment(
         payment_method=payload.payment_method,
         payment_status=payload.payment_status,
         paid_at=paid_at,
+        created_by_staff_id=payload.created_by_staff_id,
+        created_by_customer_id=payload.created_by_customer_id,
+        created_by_principal_type=payload.created_by_principal_type or ("organization_staff" if payload.created_by_staff_id else "customer" if payload.created_by_customer_id else "system"),
+        recorded_by_label=payload.recorded_by_label,
         created_by=payload.created_by,
         notes=payload.notes,
     )
@@ -240,7 +274,10 @@ def create_payment(
         record_audit(
             db,
             organization_id=organization.id,
-            actor=payload.created_by or "internal-admin",
+            actor=payload.created_by or payload.recorded_by_label or "internal-admin",
+            actor_type=payment.created_by_principal_type or "organization_staff",
+            actor_id=str(payment.created_by_staff_id or payment.created_by_customer_id or "internal-admin"),
+            actor_label=payload.recorded_by_label or payload.created_by,
             action="payment.created",
             target_type="payment",
             target_id=payload.transaction_reference,

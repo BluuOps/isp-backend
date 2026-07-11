@@ -3,6 +3,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.platform_auth import require_platform_admin
+from app.core.principal import reject_customer_principal
 from app.database import get_db
 from app.models import Customer, FeatureFlag, Organization, Subscription, User
 from app.models.radacct import RadAcct
@@ -22,7 +23,7 @@ from app.services.onboarding import onboard_organization
 router = APIRouter(
     prefix="/platform",
     tags=["Platform Administration"],
-    dependencies=[Depends(require_platform_admin)],
+    dependencies=[Depends(require_platform_admin), Depends(reject_customer_principal)],
 )
 
 

@@ -1,5 +1,12 @@
 from app.schemas.billing import BillingAccountCreate, BillingAccountResponse, BillingAccountUpdate
 from app.schemas.customer import CustomerCreate, CustomerLocation, CustomerResponse, CustomerUpdate
+from app.schemas.customer_auth import (
+    CustomerAuthLoginRequest,
+    CustomerAuthResponse,
+    CustomerAuthUser,
+    CustomerPasswordChangeRequest,
+    CustomerPortalAccountResponse,
+)
 from app.schemas.audit import AuditLogListResponse, AuditLogResponse
 from app.schemas.payment import PaymentCreate, PaymentResponse, PaymentSummary
 from app.schemas.radius_session import RadiusDisconnectRequest, RadiusDisconnectResponse, RadiusSessionResponse
@@ -27,6 +34,11 @@ __all__ = [
     "CustomerLocation",
     "CustomerResponse",
     "CustomerUpdate",
+    "CustomerAuthLoginRequest",
+    "CustomerAuthResponse",
+    "CustomerAuthUser",
+    "CustomerPasswordChangeRequest",
+    "CustomerPortalAccountResponse",
     "RadiusDisconnectRequest",
     "RadiusDisconnectResponse",
     "RadiusSessionResponse",

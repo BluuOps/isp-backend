@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 PAYMENT_STATUSES = {"pending", "paid", "failed", "reversed", "cancelled"}
@@ -19,6 +19,10 @@ class PaymentCreate(BaseModel):
     payment_method: str = Field(..., min_length=1, max_length=50)
     payment_status: str = Field(default="paid", min_length=1, max_length=30)
     paid_at: Optional[datetime] = None
+    created_by_staff_id: Optional[int] = None
+    created_by_customer_id: Optional[str] = Field(default=None, max_length=100)
+    created_by_principal_type: Optional[str] = Field(default=None, max_length=50)
+    recorded_by_label: Optional[str] = Field(default=None, max_length=255)
     created_by: Optional[str] = Field(default=None, max_length=255)
     notes: Optional[str] = None
 
@@ -43,6 +47,22 @@ class PaymentCreate(BaseModel):
             raise ValueError(f"payment_method must be one of: {', '.join(sorted(PAYMENT_METHODS))}")
         return normalized
 
+    @field_validator("created_by_principal_type")
+    @classmethod
+    def validate_principal_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        normalized = value.lower()
+        if normalized not in {"organization_staff", "customer", "system"}:
+            raise ValueError("created_by_principal_type must be organization_staff, customer, or system")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_single_creator_identity(self) -> "PaymentCreate":
+        if self.created_by_staff_id is not None and self.created_by_customer_id is not None:
+            raise ValueError("Payment cannot have both staff and customer creators")
+        return self
+
 
 class PaymentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -60,6 +80,10 @@ class PaymentResponse(BaseModel):
     paid_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    created_by_staff_id: Optional[int] = None
+    created_by_customer_id: Optional[str] = None
+    created_by_principal_type: Optional[str] = None
+    recorded_by_label: Optional[str] = None
     created_by: Optional[str] = None
     notes: Optional[str] = None
 

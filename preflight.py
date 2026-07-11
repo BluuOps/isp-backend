@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from app import app
 from app.database import Base
-from app.models import PaymentTransaction, RadAcct, RadCheck, RadReply, ServicePlan, User
-from app.schemas import PaymentCreate, PaymentResponse, RadiusDisconnectRequest, RadiusSessionResponse, ServicePlanCreate, UserCreate
+from app.models import CustomerPortalAccount, PaymentTransaction, RadAcct, RadCheck, RadReply, ServicePlan, User
+from app.schemas import (
+    CustomerAuthLoginRequest,
+    CustomerAuthResponse,
+    PaymentCreate,
+    PaymentResponse,
+    RadiusDisconnectRequest,
+    RadiusSessionResponse,
+    ServicePlanCreate,
+    UserCreate,
+)
 
 
 def main() -> None:
@@ -19,6 +28,10 @@ def main() -> None:
         ("POST", "/auth/login"),
         ("GET", "/auth/me"),
         ("POST", "/auth/logout"),
+        ("POST", "/customer-auth/login"),
+        ("GET", "/customer-auth/me"),
+        ("POST", "/customer-auth/logout"),
+        ("POST", "/customer-auth/change-password"),
         ("GET", "/platform/dashboard"),
         ("GET", "/platform/organizations"),
         ("POST", "/platform/organizations"),
@@ -98,6 +111,7 @@ def main() -> None:
         "organization_billing_profiles",
         "notification_settings",
         "payment_transactions",
+        "customer_portal_accounts",
         "platform",
         "radacct",
         "radcheck",
@@ -124,6 +138,7 @@ def main() -> None:
         RadReply.__name__,
         RadAcct.__name__,
         PaymentTransaction.__name__,
+        CustomerPortalAccount.__name__,
     )
     print(
         "Schemas:",
@@ -133,6 +148,8 @@ def main() -> None:
         RadiusDisconnectRequest.__name__,
         PaymentCreate.__name__,
         PaymentResponse.__name__,
+        CustomerAuthLoginRequest.__name__,
+        CustomerAuthResponse.__name__,
     )
 
 

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.principal import reject_customer_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import RadAcct, RadCheck, User
@@ -28,7 +29,7 @@ PILOT_CALLED_STATION_ID = settings.pilot_calledstationid
 REJECT_ATTRIBUTE = "Auth-Type"
 REJECT_VALUE = "Reject"
 
-router = APIRouter(prefix="/radius", tags=["RADIUS Sessions"])
+router = APIRouter(prefix="/radius", tags=["RADIUS Sessions"], dependencies=[Depends(reject_customer_principal)])
 
 
 @router.get("/sessions", response_model=List[RadiusSessionResponse])

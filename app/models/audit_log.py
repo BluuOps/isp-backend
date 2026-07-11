@@ -9,6 +9,9 @@ class AuditLog(Base):
 
     id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    actor_type = Column(String(50), nullable=False, default="system", index=True)
+    actor_id = Column(String(255), index=True)
+    actor_label = Column(String(255))
     actor = Column(String(255), nullable=False, default="system")
     action = Column(String(100), nullable=False, index=True)
     target_type = Column(String(100), nullable=False)

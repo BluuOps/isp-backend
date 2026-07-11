@@ -9,6 +9,9 @@ class AuditLogResponse(BaseModel):
 
     id: int
     organization_id: Optional[int] = None
+    actor_type: str
+    actor_id: Optional[str] = None
+    actor_label: Optional[str] = None
     actor: str
     action: str
     target_type: str

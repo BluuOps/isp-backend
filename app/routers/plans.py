@@ -5,13 +5,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import conflict
+from app.core.principal import reject_customer_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import ServicePlan, User
 from app.schemas import ServicePlanCreate, ServicePlanResponse, ServicePlanUpdate
 
 
-router = APIRouter(prefix="/plans", tags=["Service Plans"])
+router = APIRouter(prefix="/plans", tags=["Service Plans"], dependencies=[Depends(reject_customer_principal)])
 
 
 @router.get("", response_model=List[ServicePlanResponse])
