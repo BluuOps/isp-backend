@@ -1,0 +1,547 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from sqlalchemy import and_, or_
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.core.principal import bearer_payload
+from app.database import get_db
+from app.models import (
+    AuditLog,
+    BillingAccount,
+    Customer,
+    CustomerPortalAccount,
+    Organization,
+    PaymentTransaction,
+    RadAcct,
+    ServicePlan,
+    SupportTicket,
+    TicketMessage,
+    User,
+)
+from app.schemas.customer_portal import (
+    CustomerPortalDashboard,
+    CustomerPortalOrganizationBranding,
+    CustomerPortalPaymentDetail,
+    CustomerPortalPaymentSummary,
+    CustomerPortalProfile,
+    CustomerPortalProfileUpdate,
+    CustomerPortalServiceSummary,
+    CustomerPortalSubscription,
+    CustomerPortalTicketCreate,
+    CustomerPortalTicketMessageResponse,
+    CustomerPortalTicketResponse,
+)
+from app.services.audit import record_audit
+
+
+router = APIRouter(prefix="/customer-portal", tags=["Customer Portal"])
+
+
+@dataclass(frozen=True)
+class CustomerPortalContext:
+    account: CustomerPortalAccount
+    customer: Customer
+    organization: Organization
+
+
+def _safe_actor_label(context: CustomerPortalContext) -> str:
+    return context.customer.name or context.account.email
+
+
+def _record_customer_audit(
+    db: Session,
+    context: CustomerPortalContext,
+    *,
+    action: str,
+    target_type: str,
+    target_id: str | None,
+    old_value: dict | None = None,
+    new_value: dict | None = None,
+    success: bool = True,
+) -> None:
+    record_audit(
+        db,
+        organization_id=context.organization.id,
+        actor_type="customer",
+        actor_id=str(context.account.id),
+        actor_label=_safe_actor_label(context),
+        actor=context.account.email,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        old_value=old_value,
+        new_value=new_value,
+        success=success,
+    )
+
+
+def get_customer_portal_context(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> CustomerPortalContext:
+    payload = bearer_payload(authorization)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing customer token")
+    if payload.get("principal_type") != "customer":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Customer portal access requires a customer token")
+
+    try:
+        account_id = int(payload["sub"])
+        organization_id = int(payload["organization_id"])
+        customer_id = str(payload["customer_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid customer token") from exc
+
+    account = (
+        db.query(CustomerPortalAccount)
+        .filter(
+            CustomerPortalAccount.id == account_id,
+            CustomerPortalAccount.organization_id == organization_id,
+            CustomerPortalAccount.customer_id == customer_id,
+        )
+        .first()
+    )
+    if not account or account.status != "active":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid customer token")
+
+    organization = db.query(Organization).filter(Organization.id == organization_id).first()
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id, Customer.organization_id == organization_id)
+        .first()
+    )
+    if not organization or not customer:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid customer token")
+    return CustomerPortalContext(account=account, customer=customer, organization=organization)
+
+
+def _branding(organization: Organization) -> CustomerPortalOrganizationBranding:
+    return CustomerPortalOrganizationBranding(
+        id=organization.id,
+        name=organization.name,
+        slug=organization.slug,
+        logo=organization.logo,
+        currency=organization.currency,
+        timezone=organization.timezone,
+    )
+
+
+def _mask_username(username: str) -> str:
+    if len(username) <= 4:
+        return username[0:1] + "***"
+    return f"{username[:2]}***{username[-2:]}"
+
+
+def _latest_session(db: Session, username: str) -> RadAcct | None:
+    return (
+        db.query(RadAcct)
+        .filter(RadAcct.username == username)
+        .order_by(RadAcct.acctstarttime.desc().nullslast())
+        .first()
+    )
+
+
+def _online(db: Session, username: str) -> bool:
+    return db.query(RadAcct).filter(RadAcct.username == username, RadAcct.acctstoptime.is_(None)).first() is not None
+
+
+def _service_response(db: Session, service: User, organization_id: int) -> CustomerPortalServiceSummary:
+    plan = (
+        db.query(ServicePlan)
+        .filter(ServicePlan.organization_id == organization_id, ServicePlan.name == service.service_plan)
+        .first()
+    )
+    session = _latest_session(db, service.username)
+    return CustomerPortalServiceSummary(
+        id=service.id,
+        username=service.username,
+        masked_username=_mask_username(service.username),
+        service_plan=service.service_plan,
+        rate_limit=plan.rate_limit if plan else None,
+        status=service.status,
+        expiration_date=service.expiration_date,
+        online=_online(db, service.username),
+        last_session_started_at=session.acctstarttime if session else None,
+        last_session_updated_at=session.acctupdatetime if session else None,
+        framed_ip_address=str(session.framedipaddress) if session and session.framedipaddress else None,
+    )
+
+
+def _payment_summary(payment: PaymentTransaction) -> CustomerPortalPaymentSummary:
+    return CustomerPortalPaymentSummary(
+        id=payment.id,
+        transaction_reference=payment.transaction_reference,
+        amount=payment.amount,
+        currency=payment.currency,
+        payment_method=payment.payment_method,
+        payment_status=payment.payment_status,
+        paid_at=payment.paid_at,
+        created_at=payment.created_at,
+    )
+
+
+def _ticket_response(db: Session, ticket: SupportTicket, include_messages: bool = False) -> CustomerPortalTicketResponse:
+    messages: list[CustomerPortalTicketMessageResponse] = []
+    if include_messages:
+        rows = (
+            db.query(TicketMessage)
+            .filter(TicketMessage.ticket_id == ticket.id)
+            .order_by(TicketMessage.created_at.asc(), TicketMessage.id.asc())
+            .all()
+        )
+        messages = [CustomerPortalTicketMessageResponse.model_validate(row) for row in rows]
+    return CustomerPortalTicketResponse(
+        id=ticket.id,
+        customer_id=ticket.customer_id,
+        user_id=ticket.user_id,
+        subject=ticket.subject,
+        category=ticket.category,
+        priority=ticket.priority,
+        status=ticket.status,
+        created_at=ticket.created_at,
+        updated_at=ticket.updated_at,
+        resolved_at=ticket.resolved_at,
+        closed_at=ticket.closed_at,
+        messages=messages,
+    )
+
+
+def _customer_services(db: Session, context: CustomerPortalContext) -> list[User]:
+    return (
+        db.query(User)
+        .filter(User.organization_id == context.organization.id, User.customer_id == context.customer.id)
+        .order_by(User.id.asc())
+        .all()
+    )
+
+
+@router.get("/dashboard", response_model=CustomerPortalDashboard)
+def dashboard(
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPortalDashboard:
+    services = _customer_services(db, context)
+    service_items = [_service_response(db, service, context.organization.id) for service in services]
+    latest_service = services[0] if services else None
+    recent_payments = (
+        db.query(PaymentTransaction)
+        .filter(PaymentTransaction.organization_id == context.organization.id, PaymentTransaction.customer_id == context.customer.id)
+        .order_by(PaymentTransaction.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    recent_tickets = (
+        db.query(SupportTicket)
+        .filter(SupportTicket.organization_id == context.organization.id, SupportTicket.customer_id == context.customer.id)
+        .order_by(SupportTicket.created_at.desc(), SupportTicket.id.desc())
+        .limit(5)
+        .all()
+    )
+    open_ticket_count = (
+        db.query(SupportTicket)
+        .filter(
+            SupportTicket.organization_id == context.organization.id,
+            SupportTicket.customer_id == context.customer.id,
+            SupportTicket.status.in_(["open", "in_progress", "waiting_customer"]),
+        )
+        .count()
+    )
+    empty_states = {}
+    if not services:
+        empty_states["services"] = "No linked PPPoE service accounts are available."
+    if not recent_payments:
+        empty_states["payments"] = "No payments are available yet."
+    if not recent_tickets:
+        empty_states["tickets"] = "No support tickets are open."
+
+    _record_customer_audit(db, context, action="customer.portal.dashboard_viewed", target_type="customer", target_id=context.customer.id)
+    db.commit()
+    return CustomerPortalDashboard(
+        customer_id=context.customer.id,
+        customer_name=context.customer.name,
+        account_status=context.customer.account_status,
+        organization=_branding(context.organization),
+        current_plan=latest_service.service_plan if latest_service else None,
+        expiration_date=latest_service.expiration_date if latest_service else None,
+        subscription_status=context.organization.subscription_status,
+        service_status=latest_service.status if latest_service else "no_service",
+        online=any(item.online for item in service_items),
+        services=service_items,
+        recent_payments=[_payment_summary(payment) for payment in recent_payments],
+        open_ticket_count=open_ticket_count,
+        recent_tickets=[_ticket_response(db, ticket) for ticket in recent_tickets],
+        renewal_eligible=bool(latest_service and latest_service.status in {"active", "suspended", "pending"}),
+        empty_states=empty_states,
+    )
+
+
+@router.get("/profile", response_model=CustomerPortalProfile)
+def get_profile(context: CustomerPortalContext = Depends(get_customer_portal_context)) -> CustomerPortalProfile:
+    return CustomerPortalProfile(
+        customer_id=context.customer.id,
+        name=context.customer.name,
+        email=context.customer.email,
+        phone=context.customer.phone,
+        address=context.customer.address,
+        customer_type=context.customer.customer_type,
+        account_status=context.customer.account_status,
+        organization=_branding(context.organization),
+    )
+
+
+@router.put("/profile", response_model=CustomerPortalProfile)
+def update_profile(
+    payload: CustomerPortalProfileUpdate,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPortalProfile:
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No safe profile fields were provided")
+
+    if "email" in updates:
+        duplicate_customer = (
+            db.query(Customer)
+            .filter(Customer.organization_id == context.organization.id, Customer.email == updates["email"], Customer.id != context.customer.id)
+            .first()
+        )
+        duplicate_account = (
+            db.query(CustomerPortalAccount)
+            .filter(CustomerPortalAccount.organization_id == context.organization.id, CustomerPortalAccount.email == updates["email"], CustomerPortalAccount.id != context.account.id)
+            .first()
+        )
+        if duplicate_customer or duplicate_account:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already in use")
+
+    old = {"email": context.customer.email, "phone": context.customer.phone, "address": context.customer.address}
+    if "email" in updates:
+        context.customer.email = updates["email"]
+        context.account.email = updates["email"].strip().lower()
+    if "phone" in updates:
+        context.customer.phone = updates["phone"]
+        context.account.phone = updates["phone"].strip().lower()
+    if "address" in updates:
+        context.customer.address = updates["address"]
+    _record_customer_audit(
+        db,
+        context,
+        action="customer.profile.updated",
+        target_type="customer",
+        target_id=context.customer.id,
+        old_value=old,
+        new_value=updates,
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Profile update conflicts with an existing record") from exc
+    return get_profile(context)
+
+
+@router.get("/services", response_model=list[CustomerPortalServiceSummary])
+def list_services(
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> list[CustomerPortalServiceSummary]:
+    return [_service_response(db, service, context.organization.id) for service in _customer_services(db, context)]
+
+
+@router.get("/services/{service_id}", response_model=CustomerPortalServiceSummary)
+def get_service(
+    service_id: int,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPortalServiceSummary:
+    service = (
+        db.query(User)
+        .filter(User.id == service_id, User.organization_id == context.organization.id, User.customer_id == context.customer.id)
+        .first()
+    )
+    if not service:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+    _record_customer_audit(db, context, action="customer.service.viewed", target_type="user", target_id=str(service.id))
+    db.commit()
+    return _service_response(db, service, context.organization.id)
+
+
+@router.get("/subscription", response_model=CustomerPortalSubscription)
+def get_subscription(
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPortalSubscription:
+    services = _customer_services(db, context)
+    latest_service = services[0] if services else None
+    last_payment = (
+        db.query(PaymentTransaction)
+        .filter(PaymentTransaction.organization_id == context.organization.id, PaymentTransaction.customer_id == context.customer.id)
+        .order_by(PaymentTransaction.created_at.desc())
+        .first()
+    )
+    account = None
+    if latest_service:
+        account = (
+            db.query(BillingAccount)
+            .filter(BillingAccount.organization_id == context.organization.id, BillingAccount.user_id == latest_service.id)
+            .first()
+        )
+    _record_customer_audit(db, context, action="customer.subscription.viewed", target_type="customer", target_id=context.customer.id)
+    db.commit()
+    return CustomerPortalSubscription(
+        current_plan=latest_service.service_plan if latest_service else None,
+        service_status=latest_service.status if latest_service else None,
+        expiration_date=latest_service.expiration_date if latest_service else None,
+        renewal_status="eligible" if latest_service and latest_service.status in {"active", "suspended", "pending"} else "not_available",
+        renewal_eligible=bool(latest_service and latest_service.status in {"active", "suspended", "pending"}),
+        outstanding_balance=Decimal(str(account.balance)) if account and account.balance is not None else Decimal("0"),
+        last_payment=_payment_summary(last_payment) if last_payment else None,
+    )
+
+
+@router.get("/payments", response_model=list[CustomerPortalPaymentSummary])
+def list_payments(
+    status_filter: str | None = Query(default=None, alias="status", max_length=30),
+    method: str | None = Query(default=None, max_length=50),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> list[CustomerPortalPaymentSummary]:
+    query = db.query(PaymentTransaction).filter(
+        PaymentTransaction.organization_id == context.organization.id,
+        PaymentTransaction.customer_id == context.customer.id,
+    )
+    if status_filter:
+        query = query.filter(PaymentTransaction.payment_status == status_filter.lower())
+    if method:
+        query = query.filter(PaymentTransaction.payment_method == method.lower())
+    if date_from:
+        query = query.filter(PaymentTransaction.created_at >= date_from)
+    if date_to:
+        query = query.filter(PaymentTransaction.created_at <= date_to)
+    rows = query.order_by(PaymentTransaction.created_at.desc()).offset(offset).limit(limit).all()
+    return [_payment_summary(row) for row in rows]
+
+
+@router.get("/payments/{payment_id}", response_model=CustomerPortalPaymentDetail)
+def get_payment(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPortalPaymentDetail:
+    payment = (
+        db.query(PaymentTransaction)
+        .filter(
+            PaymentTransaction.id == payment_id,
+            PaymentTransaction.organization_id == context.organization.id,
+            PaymentTransaction.customer_id == context.customer.id,
+        )
+        .first()
+    )
+    if not payment:
+        _record_customer_audit(db, context, action="customer.payment.view_denied", target_type="payment", target_id=str(payment_id), success=False)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
+    _record_customer_audit(db, context, action="customer.payment.viewed", target_type="payment", target_id=str(payment.id))
+    db.commit()
+    return CustomerPortalPaymentDetail(
+        **_payment_summary(payment).model_dump(),
+        external_reference=payment.external_reference,
+        user_id=payment.user_id,
+        notes=payment.notes,
+    )
+
+
+@router.get("/tickets", response_model=list[CustomerPortalTicketResponse])
+def list_tickets(
+    status_filter: str | None = Query(default=None, alias="status", max_length=50),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> list[CustomerPortalTicketResponse]:
+    query = db.query(SupportTicket).filter(
+        SupportTicket.organization_id == context.organization.id,
+        SupportTicket.customer_id == context.customer.id,
+    )
+    if status_filter:
+        query = query.filter(SupportTicket.status == status_filter)
+    rows = query.order_by(SupportTicket.created_at.desc(), SupportTicket.id.desc()).offset(offset).limit(limit).all()
+    return [_ticket_response(db, row) for row in rows]
+
+
+@router.post("/tickets", response_model=CustomerPortalTicketResponse, status_code=status.HTTP_201_CREATED)
+def create_ticket(
+    payload: CustomerPortalTicketCreate,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPortalTicketResponse:
+    if payload.user_id is not None:
+        linked_service = (
+            db.query(User)
+            .filter(User.id == payload.user_id, User.organization_id == context.organization.id, User.customer_id == context.customer.id)
+            .first()
+        )
+        if not linked_service:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected service does not belong to this customer")
+    ticket = SupportTicket(
+        organization_id=context.organization.id,
+        customer_id=context.customer.id,
+        user_id=payload.user_id,
+        subject=payload.subject,
+        category=payload.category,
+        priority=payload.priority,
+        status="open",
+    )
+    db.add(ticket)
+    db.flush()
+    message = TicketMessage(
+        ticket_id=ticket.id,
+        sender_type="customer",
+        sender_id=str(context.account.id),
+        body=payload.body,
+    )
+    db.add(message)
+    _record_customer_audit(
+        db,
+        context,
+        action="customer.ticket.created",
+        target_type="support_ticket",
+        target_id=str(ticket.id),
+        new_value={"subject": ticket.subject, "category": ticket.category, "priority": ticket.priority},
+    )
+    db.commit()
+    db.refresh(ticket)
+    return _ticket_response(db, ticket, include_messages=True)
+
+
+@router.get("/tickets/{ticket_id}", response_model=CustomerPortalTicketResponse)
+def get_ticket(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPortalTicketResponse:
+    ticket = (
+        db.query(SupportTicket)
+        .filter(
+            SupportTicket.id == ticket_id,
+            SupportTicket.organization_id == context.organization.id,
+            SupportTicket.customer_id == context.customer.id,
+        )
+        .first()
+    )
+    if not ticket:
+        _record_customer_audit(db, context, action="customer.ticket.view_denied", target_type="support_ticket", target_id=str(ticket_id), success=False)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+    _record_customer_audit(db, context, action="customer.ticket.viewed", target_type="support_ticket", target_id=str(ticket.id))
+    db.commit()
+    return _ticket_response(db, ticket, include_messages=True)

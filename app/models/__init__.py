@@ -15,6 +15,7 @@ from app.models.radius import RadCheck, RadReply
 from app.models.role import Role
 from app.models.service_plan import ServicePlan
 from app.models.subscription import Subscription
+from app.models.support_ticket import SupportTicket, TicketMessage
 from app.models.user import User
 from app.models.zone import Zone
 
@@ -37,6 +38,8 @@ __all__ = [
     "Role",
     "ServicePlan",
     "Subscription",
+    "SupportTicket",
+    "TicketMessage",
     "User",
     "Zone",
 ]

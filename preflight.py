@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app import app
 from app.database import Base
-from app.models import CustomerPortalAccount, PaymentTransaction, RadAcct, RadCheck, RadReply, ServicePlan, User
+from app.models import CustomerPortalAccount, PaymentTransaction, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
 from app.schemas import (
     CustomerAuthLoginRequest,
     CustomerAuthResponse,
@@ -32,6 +32,17 @@ def main() -> None:
         ("GET", "/customer-auth/me"),
         ("POST", "/customer-auth/logout"),
         ("POST", "/customer-auth/change-password"),
+        ("GET", "/customer-portal/dashboard"),
+        ("GET", "/customer-portal/profile"),
+        ("PUT", "/customer-portal/profile"),
+        ("GET", "/customer-portal/services"),
+        ("GET", "/customer-portal/services/{service_id}"),
+        ("GET", "/customer-portal/subscription"),
+        ("GET", "/customer-portal/payments"),
+        ("GET", "/customer-portal/payments/{payment_id}"),
+        ("GET", "/customer-portal/tickets"),
+        ("POST", "/customer-portal/tickets"),
+        ("GET", "/customer-portal/tickets/{ticket_id}"),
         ("GET", "/platform/dashboard"),
         ("GET", "/platform/organizations"),
         ("POST", "/platform/organizations"),
@@ -112,6 +123,8 @@ def main() -> None:
         "notification_settings",
         "payment_transactions",
         "customer_portal_accounts",
+        "support_tickets",
+        "ticket_messages",
         "platform",
         "radacct",
         "radcheck",
@@ -139,6 +152,8 @@ def main() -> None:
         RadAcct.__name__,
         PaymentTransaction.__name__,
         CustomerPortalAccount.__name__,
+        SupportTicket.__name__,
+        TicketMessage.__name__,
     )
     print(
         "Schemas:",

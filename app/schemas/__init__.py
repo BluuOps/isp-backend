@@ -7,6 +7,19 @@ from app.schemas.customer_auth import (
     CustomerPasswordChangeRequest,
     CustomerPortalAccountResponse,
 )
+from app.schemas.customer_portal import (
+    CustomerPortalDashboard,
+    CustomerPortalOrganizationBranding,
+    CustomerPortalPaymentDetail,
+    CustomerPortalPaymentSummary,
+    CustomerPortalProfile,
+    CustomerPortalProfileUpdate,
+    CustomerPortalServiceSummary,
+    CustomerPortalSubscription,
+    CustomerPortalTicketCreate,
+    CustomerPortalTicketMessageResponse,
+    CustomerPortalTicketResponse,
+)
 from app.schemas.audit import AuditLogListResponse, AuditLogResponse
 from app.schemas.payment import PaymentCreate, PaymentResponse, PaymentSummary
 from app.schemas.radius_session import RadiusDisconnectRequest, RadiusDisconnectResponse, RadiusSessionResponse
@@ -39,6 +52,17 @@ __all__ = [
     "CustomerAuthUser",
     "CustomerPasswordChangeRequest",
     "CustomerPortalAccountResponse",
+    "CustomerPortalDashboard",
+    "CustomerPortalOrganizationBranding",
+    "CustomerPortalPaymentDetail",
+    "CustomerPortalPaymentSummary",
+    "CustomerPortalProfile",
+    "CustomerPortalProfileUpdate",
+    "CustomerPortalServiceSummary",
+    "CustomerPortalSubscription",
+    "CustomerPortalTicketCreate",
+    "CustomerPortalTicketMessageResponse",
+    "CustomerPortalTicketResponse",
     "RadiusDisconnectRequest",
     "RadiusDisconnectResponse",
     "RadiusSessionResponse",
