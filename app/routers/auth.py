@@ -6,11 +6,12 @@ import secrets
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.tenant_host import resolve_tenant_from_request
 from app.database import get_db
 from app.models.organization import Organization
 from app.services.audit import record_audit
@@ -24,7 +25,7 @@ TOKEN_TTL_SECONDS = 12 * 60 * 60
 class LoginRequest(BaseModel):
     email: str = Field(min_length=1)
     password: str = Field(min_length=1)
-    tenant_id: str = Field(min_length=1)
+    tenant_id: str | None = None
 
 
 class AuthUser(BaseModel):
@@ -140,7 +141,7 @@ def _auth_response(email: str, organization: Organization, token: str) -> AuthRe
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> AuthResponse:
     # Temporary RC1.1 internal auth bridge. Replace with full organization/customer auth in Phase 3.
     configured_email, configured_password, secret = _require_internal_auth_config()
     if not secrets.compare_digest(payload.email.lower(), configured_email.lower()) or not secrets.compare_digest(
@@ -149,7 +150,15 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
     ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    organization = _get_organization(db, payload.tenant_id)
+    tenant_context = resolve_tenant_from_request(request, db)
+    organization = tenant_context.organization
+
+    # Body-provided tenant identifiers are ignored for authorization. They are
+    # accepted only as a staging compatibility hint when hostname fallback is
+    # explicitly enabled, and even then they must match the resolved tenant.
+    if tenant_context.source == "staging_fallback" and payload.tenant_id and payload.tenant_id != organization.slug:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid tenant")
+
     now = int(time.time())
     token = _create_token(
         {

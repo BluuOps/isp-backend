@@ -5,6 +5,7 @@ from app.schemas.customer_auth import (
     CustomerAuthResponse,
     CustomerAuthUser,
     CustomerPasswordChangeRequest,
+    CustomerTenantResponse,
     CustomerPortalAccountResponse,
 )
 from app.schemas.customer_portal import (
@@ -51,6 +52,7 @@ __all__ = [
     "CustomerAuthResponse",
     "CustomerAuthUser",
     "CustomerPasswordChangeRequest",
+    "CustomerTenantResponse",
     "CustomerPortalAccountResponse",
     "CustomerPortalDashboard",
     "CustomerPortalOrganizationBranding",

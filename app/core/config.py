@@ -35,6 +35,37 @@ class Settings:
     internal_admin_email: str | None = os.getenv("INTERNAL_ADMIN_EMAIL")
     internal_admin_password: str | None = os.getenv("INTERNAL_ADMIN_PASSWORD")
     upload_path: str = os.getenv("UPLOAD_PATH", "/var/lib/radiusfiber/uploads")
+    tenant_allowed_domains: tuple[str, ...] = tuple(
+        item.strip().lower().lstrip(".")
+        for item in os.getenv(
+            "TENANT_ALLOWED_DOMAINS",
+            os.getenv("ALLOWED_TENANT_DOMAINS", "radiusfiber.com"),
+        ).split(",")
+        if item.strip()
+    )
+    tenant_reserved_subdomains: tuple[str, ...] = tuple(
+        item.strip().lower()
+        for item in os.getenv("TENANT_RESERVED_SUBDOMAINS", "app,api,www,admin,platform").split(",")
+        if item.strip()
+    )
+    allow_staging_tenant_fallback: bool = os.getenv("ALLOW_STAGING_TENANT_FALLBACK", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    staging_organization_slug: str = os.getenv("STAGING_ORGANIZATION_SLUG", default_organization_slug)
+    trust_forwarded_host: bool = os.getenv("TRUST_FORWARDED_HOST", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    trusted_proxy_ips: tuple[str, ...] = tuple(
+        item.strip()
+        for item in os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1,::1").split(",")
+        if item.strip()
+    )
 
 
 settings = Settings()

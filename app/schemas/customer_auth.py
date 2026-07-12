@@ -26,6 +26,16 @@ class CustomerAuthResponse(BaseModel):
     user: CustomerAuthUser
 
 
+class CustomerTenantResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+    logo: str | None = None
+    currency: str
+    timezone: str
+    resolution_source: str
+
+
 class CustomerPasswordChangeRequest(BaseModel):
     current_password: str = Field(..., min_length=1)
     new_password: str = Field(..., min_length=8, max_length=255)

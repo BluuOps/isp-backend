@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.principal import bearer_payload, create_principal_token
+from app.core.tenant_host import resolve_tenant_from_request
 from app.database import get_db
 from app.models import Customer, CustomerPortalAccount, Organization
 from app.schemas.customer_auth import (
     CustomerAuthLoginRequest,
     CustomerAuthResponse,
+    CustomerTenantResponse,
     CustomerAuthUser,
     CustomerPasswordChangeRequest,
 )
@@ -78,20 +80,25 @@ def _account_from_token(db: Session, authorization: str | None) -> tuple[Custome
 
 
 @router.post("/login", response_model=CustomerAuthResponse)
-def login(payload: CustomerAuthLoginRequest, db: Session = Depends(get_db)) -> CustomerAuthResponse:
+def login(payload: CustomerAuthLoginRequest, request: Request, db: Session = Depends(get_db)) -> CustomerAuthResponse:
     identifier = normalize_identifier(payload.identifier)
-    organization_slug = payload.organization_slug or payload.tenant_id
-    query = db.query(CustomerPortalAccount).filter(
-        or_(CustomerPortalAccount.email == identifier, CustomerPortalAccount.phone == identifier)
-    )
-    if organization_slug:
-        organization = db.query(Organization).filter(Organization.slug == organization_slug).first()
-        if not organization:
+    tenant_context = resolve_tenant_from_request(request, db)
+    organization = tenant_context.organization
+
+    # Temporary staging compatibility only. The hostname resolver remains the
+    # authoritative source; frontend-provided tenant fields are ignored unless
+    # ALLOW_STAGING_TENANT_FALLBACK explicitly enabled the fallback path.
+    if tenant_context.source == "staging_fallback":
+        requested_slug = payload.organization_slug or payload.tenant_id
+        if requested_slug and requested_slug != organization.slug:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-        query = query.filter(CustomerPortalAccount.organization_id == organization.id)
+
+    query = db.query(CustomerPortalAccount).filter(
+        CustomerPortalAccount.organization_id == organization.id,
+        or_(CustomerPortalAccount.email == identifier, CustomerPortalAccount.phone == identifier),
+    )
     matches = query.limit(2).all()
     account = matches[0] if len(matches) == 1 else None
-    organization = db.query(Organization).filter(Organization.id == account.organization_id).first() if account else None
 
     if not account or not organization or not verify_password(payload.password, account.password_hash):
         if account:
@@ -153,6 +160,21 @@ def login(payload: CustomerAuthLoginRequest, db: Session = Depends(get_db)) -> C
 def me(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> CustomerAuthResponse:
     account, organization = _account_from_token(db, authorization)
     return CustomerAuthResponse(token=authorization.split(" ", 1)[1], user=_auth_user(account, organization))
+
+
+@router.get("/tenant", response_model=CustomerTenantResponse)
+def tenant(request: Request, db: Session = Depends(get_db)) -> CustomerTenantResponse:
+    context = resolve_tenant_from_request(request, db)
+    organization = context.organization
+    return CustomerTenantResponse(
+        id=organization.id,
+        name=organization.name,
+        slug=organization.slug,
+        logo=organization.logo,
+        currency=organization.currency,
+        timezone=organization.timezone,
+        resolution_source=context.source,
+    )
 
 
 @router.post("/logout")

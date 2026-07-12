@@ -6,6 +6,7 @@ from app.models import CustomerPortalAccount, PaymentTransaction, RadAcct, RadCh
 from app.schemas import (
     CustomerAuthLoginRequest,
     CustomerAuthResponse,
+    CustomerTenantResponse,
     PaymentCreate,
     PaymentResponse,
     RadiusDisconnectRequest,
@@ -29,6 +30,7 @@ def main() -> None:
         ("GET", "/auth/me"),
         ("POST", "/auth/logout"),
         ("POST", "/customer-auth/login"),
+        ("GET", "/customer-auth/tenant"),
         ("GET", "/customer-auth/me"),
         ("POST", "/customer-auth/logout"),
         ("POST", "/customer-auth/change-password"),
@@ -165,6 +167,7 @@ def main() -> None:
         PaymentResponse.__name__,
         CustomerAuthLoginRequest.__name__,
         CustomerAuthResponse.__name__,
+        CustomerTenantResponse.__name__,
     )
 
 
