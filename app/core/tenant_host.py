@@ -36,8 +36,16 @@ def _host_without_port(raw_host: str | None) -> str:
     if value.startswith("["):
         if "]" not in value:
             raise _tenant_error("malformed_tenant_host", "Host header is malformed.")
-        return value.split("]", 1)[0].lstrip("[")
-    return value.rsplit(":", 1)[0] if ":" in value else value
+        host, remainder = value.split("]", 1)
+        if remainder and not (remainder.startswith(":") and remainder[1:].isdigit()):
+            raise _tenant_error("malformed_tenant_host", "Host port is malformed.")
+        return host.lstrip("[")
+    if ":" in value:
+        host, port = value.rsplit(":", 1)
+        if not host or not port.isdigit():
+            raise _tenant_error("malformed_tenant_host", "Host port is malformed.")
+        return host
+    return value
 
 
 def request_hostname(request: Request) -> str:
