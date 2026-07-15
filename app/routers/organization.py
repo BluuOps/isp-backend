@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
-from app.core.principal import reject_customer_principal
+from app.core.principal import require_organization_staff_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import (
@@ -28,7 +28,7 @@ from app.services.audit import record_audit
 from app.services.limits import enforce_limit
 from app.services.security import generate_temporary_password, hash_password
 
-router = APIRouter(prefix="/organization", tags=["Organization Management"], dependencies=[Depends(reject_customer_principal)])
+router = APIRouter(prefix="/organization", tags=["Organization Management"], dependencies=[Depends(require_organization_staff_principal)])
 
 
 def current_organization(db: Session, context: OrganizationContext) -> Organization:

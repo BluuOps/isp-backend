@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import conflict
-from app.core.principal import reject_customer_principal
+from app.core.principal import require_organization_staff_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import BillingAccount, Customer, OrganizationStaff, PaymentTransaction, User
@@ -20,7 +20,7 @@ from app.schemas import PaymentCreate, PaymentResponse, PaymentSummary
 from app.services.audit import record_audit
 
 
-router = APIRouter(prefix="/payments", tags=["Payments"], dependencies=[Depends(reject_customer_principal)])
+router = APIRouter(prefix="/payments", tags=["Payments"], dependencies=[Depends(require_organization_staff_principal)])
 
 
 def _utc_now() -> datetime:

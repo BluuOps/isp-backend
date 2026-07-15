@@ -3,14 +3,14 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.principal import reject_customer_principal
+from app.core.principal import require_organization_staff_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import BillingAccount, User
 from app.schemas import BillingAccountCreate, BillingAccountResponse, BillingAccountUpdate
 
 
-router = APIRouter(prefix="/billing", tags=["Billing"], dependencies=[Depends(reject_customer_principal)])
+router = APIRouter(prefix="/billing", tags=["Billing"], dependencies=[Depends(require_organization_staff_principal)])
 
 
 def get_user_or_404(user_id: int, db: Session, organization_id: int) -> User:

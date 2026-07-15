@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.principal import reject_customer_principal
+from app.core.principal import require_organization_staff_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.core.errors import conflict
 from app.database import get_db
@@ -27,7 +27,7 @@ from app.schemas import (
 from app.services.audit import record_audit
 
 
-router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(reject_customer_principal)])
+router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(require_organization_staff_principal)])
 
 MIKROTIK_RATE_LIMIT_ATTRIBUTE = "Mikrotik-Rate-Limit"
 PASSWORD_ATTRIBUTE = "Cleartext-Password"

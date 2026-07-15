@@ -15,6 +15,27 @@ from app.core.config import settings
 
 PrincipalType = Literal["platform_admin", "organization_staff", "customer", "system"]
 
+PLATFORM_PERMISSIONS = [
+    "platform.dashboard.read",
+    "platform.organizations.read",
+    "platform.organizations.manage",
+    "platform.subscriptions.read",
+    "platform.subscriptions.manage",
+    "platform.feature_flags.read",
+    "platform.feature_flags.manage",
+    "platform.health.read",
+]
+
+ORGANIZATION_BRIDGE_PERMISSIONS = [
+    "billing_access",
+    "create_pppoe",
+    "delete_customer",
+    "disconnect_user",
+    "radius_access",
+    "settings_access",
+    "view_customers",
+]
+
 
 class Principal(BaseModel):
     sub: str
@@ -25,6 +46,10 @@ class Principal(BaseModel):
     roles: list[str] = []
     permissions: list[str] = []
     email: str | None = None
+
+
+def _auth_error(http_status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=http_status, detail={"error": code, "message": message})
 
 
 def _require_jwt_secret() -> str:
@@ -59,19 +84,19 @@ def decode_principal_token(token: str) -> dict[str, Any]:
     try:
         encoded_payload, signature = token.split(".", 1)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Invalid bearer token.") from exc
 
     expected = _sign(encoded_payload, _require_jwt_secret())
     if not secrets.compare_digest(signature, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Invalid bearer token.")
 
     try:
         payload = json.loads(_b64url_decode(encoded_payload))
     except (ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Invalid bearer token.") from exc
 
     if int(payload.get("exp", 0)) < int(time.time()):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "token_expired", "Bearer token has expired.")
     return payload
 
 
@@ -88,3 +113,16 @@ def reject_customer_principal(authorization: str | None = Header(default=None)) 
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Customer portal tokens cannot access organization or platform APIs",
         )
+
+
+def require_organization_staff_principal(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    payload = bearer_payload(authorization)
+    if not payload:
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "missing_organization_staff_token", "Organization staff token is required.")
+    if payload.get("principal_type") == "customer":
+        raise _auth_error(status.HTTP_403_FORBIDDEN, "wrong_principal_type", "Customer portal tokens cannot access organization workspace APIs.")
+    if payload.get("principal_type") != "organization_staff":
+        raise _auth_error(status.HTTP_403_FORBIDDEN, "wrong_principal_type", "Organization staff access is required.")
+    if not payload.get("organization_id") or not payload.get("organization_slug"):
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_organization_claims", "Organization staff token is missing required organization claims.")
+    return payload

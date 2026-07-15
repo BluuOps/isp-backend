@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.tenant_host import resolve_tenant_from_request
+from app.core.principal import ORGANIZATION_BRIDGE_PERMISSIONS, PLATFORM_PERMISSIONS
+from app.core.tenant_host import request_hostname, resolve_tenant_from_request
 from app.database import get_db
 from app.models.organization import Organization
 from app.services.audit import record_audit
@@ -34,6 +35,9 @@ class AuthUser(BaseModel):
     fullName: str
     role: str
     tenantId: str
+    principalType: str
+    organizationSlug: str | None = None
+    organizationId: int | None = None
     permissions: dict[str, bool]
 
 
@@ -48,6 +52,20 @@ class AuthResponse(BaseModel):
     token: str
     user: AuthUser
     branding: TenantBranding
+
+
+def _platform_host(request: Request) -> bool:
+    hostname = request_hostname(request)
+    return any(hostname == f"app.{domain}" for domain in settings.tenant_allowed_domains)
+
+
+def _require_platform_auth_config() -> tuple[str, str, str]:
+    if not settings.platform_admin_email or not settings.platform_admin_password or not settings.jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Platform authentication is not configured",
+        )
+    return settings.platform_admin_email, settings.platform_admin_password, settings.jwt_secret
 
 
 def _require_internal_auth_config() -> tuple[str, str, str]:
@@ -97,30 +115,28 @@ def _decode_token(token: str, secret: str) -> dict[str, Any]:
     return payload
 
 
-def _get_organization(db: Session, tenant_id: str) -> Organization:
-    organization = db.query(Organization).filter(Organization.slug == tenant_id).first()
-    if not organization and tenant_id == settings.default_organization_slug:
-        organization = db.query(Organization).filter(Organization.slug == settings.default_organization_slug).first()
+def _get_organization_from_claims(db: Session, organization_id: object, organization_slug: object) -> Organization:
+    try:
+        normalized_organization_id = int(organization_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid organization claims") from exc
+
+    normalized_slug = str(organization_slug or "")
+    organization = db.query(Organization).filter(Organization.id == normalized_organization_id).first()
     if not organization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid tenant")
     if organization.status != "active":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tenant is not active")
+    if organization.slug != normalized_slug:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Stale organization token")
     return organization
 
 
 def _permissions() -> dict[str, bool]:
-    return {
-        "radius_access": True,
-        "disconnect_user": True,
-        "create_pppoe": True,
-        "view_customers": True,
-        "delete_customer": True,
-        "billing_access": True,
-        "settings_access": True,
-    }
+    return {permission: True for permission in ORGANIZATION_BRIDGE_PERMISSIONS}
 
 
-def _auth_response(email: str, organization: Organization, token: str) -> AuthResponse:
+def _organization_auth_response(email: str, organization: Organization, token: str) -> AuthResponse:
     return AuthResponse(
         token=token,
         user=AuthUser(
@@ -129,6 +145,9 @@ def _auth_response(email: str, organization: Organization, token: str) -> AuthRe
             fullName="Internal Administrator",
             role="tenant_admin",
             tenantId=organization.slug,
+            principalType="organization_staff",
+            organizationSlug=organization.slug,
+            organizationId=organization.id,
             permissions=_permissions(),
         ),
         branding=TenantBranding(
@@ -140,8 +159,55 @@ def _auth_response(email: str, organization: Organization, token: str) -> AuthRe
     )
 
 
+def _platform_auth_response(email: str, token: str) -> AuthResponse:
+    return AuthResponse(
+        token=token,
+        user=AuthUser(
+            id="platform-admin",
+            email=email,
+            fullName="Platform Administrator",
+            role="super_admin",
+            tenantId="platform",
+            principalType="platform_admin",
+            organizationSlug=None,
+            organizationId=None,
+            permissions={permission: True for permission in PLATFORM_PERMISSIONS},
+        ),
+        branding=TenantBranding(
+            tenantId="platform",
+            ispName="RadiusFiber",
+            logoUrl="/branding/radiusfiber-logo.svg",
+            primaryColor="#2563eb",
+        ),
+    )
+
+
 @router.post("/login", response_model=AuthResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> AuthResponse:
+    if _platform_host(request):
+        configured_email, configured_password, secret = _require_platform_auth_config()
+        if not secrets.compare_digest(payload.email.lower(), configured_email.lower()) or not secrets.compare_digest(
+            payload.password,
+            configured_password,
+        ):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+        now = int(time.time())
+        token = _create_token(
+            {
+                "sub": "platform-admin",
+                "principal_type": "platform_admin",
+                "email": configured_email,
+                "role": "super_admin",
+                "roles": ["platform_admin"],
+                "permissions": PLATFORM_PERMISSIONS,
+                "iat": now,
+                "exp": now + TOKEN_TTL_SECONDS,
+            },
+            secret,
+        )
+        return _platform_auth_response(configured_email, token)
+
     # Temporary RC1.1 internal auth bridge. Replace with full organization/customer auth in Phase 3.
     configured_email, configured_password, secret = _require_internal_auth_config()
     if not secrets.compare_digest(payload.email.lower(), configured_email.lower()) or not secrets.compare_digest(
@@ -169,6 +235,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "organization_slug": organization.slug,
             "tenant_id": organization.slug,
             "role": "tenant_admin",
+            "roles": ["Organization Admin"],
+            "permissions": ORGANIZATION_BRIDGE_PERMISSIONS,
             "iat": now,
             "exp": now + TOKEN_TTL_SECONDS,
         },
@@ -187,18 +255,25 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         new_value={"tenant_id": organization.slug, "mode": "temporary_internal_bridge"},
     )
     db.commit()
-    return _auth_response(configured_email, organization, token)
+    return _organization_auth_response(configured_email, organization, token)
 
 
 @router.get("/me", response_model=AuthResponse)
 def me(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> AuthResponse:
-    _, _, secret = _require_internal_auth_config()
+    secret = settings.jwt_secret
+    if not secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="JWT signing secret is not configured",
+        )
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     payload = _decode_token(authorization.split(" ", 1)[1], secret)
-    organization = _get_organization(db, str(payload.get("tenant_id", settings.default_organization_slug)))
     token = authorization.split(" ", 1)[1]
-    return _auth_response(str(payload.get("email", settings.internal_admin_email)), organization, token)
+    if payload.get("principal_type") == "platform_admin":
+        return _platform_auth_response(str(payload.get("email", settings.platform_admin_email)), token)
+    organization = _get_organization_from_claims(db, payload.get("organization_id"), payload.get("organization_slug"))
+    return _organization_auth_response(str(payload.get("email", settings.internal_admin_email)), organization, token)
 
 
 @router.post("/logout")
