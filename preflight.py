@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from app import app
 from app.database import Base
-from app.models import CustomerPortalAccount, PaymentTransaction, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
+from app.core.config import settings
+from app.models import CustomerPortalAccount, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
 from app.schemas import (
     CustomerAuthLoginRequest,
     CustomerAuthResponse,
@@ -41,7 +42,10 @@ def main() -> None:
         ("GET", "/customer-portal/services/{service_id}"),
         ("GET", "/customer-portal/subscription"),
         ("GET", "/customer-portal/payments"),
+        ("POST", "/customer-portal/payments/initialize"),
         ("GET", "/customer-portal/payments/{payment_id}"),
+        ("GET", "/customer-portal/payments/{payment_id}/status"),
+        ("POST", "/customer-portal/payments/{payment_id}/verify"),
         ("GET", "/customer-portal/tickets"),
         ("POST", "/customer-portal/tickets"),
         ("GET", "/customer-portal/tickets/{ticket_id}"),
@@ -97,6 +101,8 @@ def main() -> None:
         ("PUT", "/billing/users/{user_id}"),
         ("GET", "/radius/sessions"),
         ("POST", "/radius/disconnect"),
+        ("POST", "/webhooks/payments/paystack"),
+        ("POST", "/webhooks/payments/paystack/{integration_key}"),
     }
     missing_routes = required_routes.difference(route_inventory)
     if missing_routes:
@@ -124,6 +130,7 @@ def main() -> None:
         "organization_billing_profiles",
         "notification_settings",
         "payment_transactions",
+        "payment_webhook_events",
         "customer_portal_accounts",
         "support_tickets",
         "ticket_messages",
@@ -141,6 +148,10 @@ def main() -> None:
     missing_tables = expected_tables.difference(metadata_tables)
     if missing_tables:
         raise RuntimeError(f"Missing expected metadata tables: {', '.join(sorted(missing_tables))}")
+    if not settings.redis_url.startswith(("redis://", "rediss://")):
+        raise RuntimeError("REDIS_URL must start with redis:// or rediss://")
+    if not settings.celery_broker_url.startswith(("redis://", "rediss://")):
+        raise RuntimeError("CELERY_BROKER_URL must start with redis:// or rediss://")
 
     print("Preflight OK")
     print("Routes:", len(app.routes))
@@ -153,6 +164,7 @@ def main() -> None:
         RadReply.__name__,
         RadAcct.__name__,
         PaymentTransaction.__name__,
+        PaymentWebhookEvent.__name__,
         CustomerPortalAccount.__name__,
         SupportTicket.__name__,
         TicketMessage.__name__,

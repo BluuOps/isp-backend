@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import settings
 from app.core.errors import ApiError, api_error_handler, integrity_error_handler
 from app.database import engine
-from app.routers import auth, billing, customer_auth, customer_portal, customers, organization, payments, plans, platform, radius_sessions, release, users
+from app.routers import auth, billing, customer_auth, customer_portal, customers, organization, payments, plans, platform, radius_sessions, release, users, webhooks
 
 
 app = FastAPI(
@@ -32,6 +32,7 @@ app.include_router(organization.router)
 app.include_router(auth.router)
 app.include_router(customer_auth.router)
 app.include_router(customer_portal.router)
+app.include_router(webhooks.router)
 app.include_router(release.router)
 
 
@@ -48,7 +49,7 @@ def readiness() -> dict[str, object]:
         "billing_accounts", "radacct", "organization_staff", "organization_roles",
         "zones", "organization_billing_profiles", "notification_settings",
         "payment_transactions", "customer_portal_accounts",
-        "support_tickets", "ticket_messages",
+        "support_tickets", "ticket_messages", "payment_webhook_events",
     }
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
@@ -67,7 +68,7 @@ def readiness() -> dict[str, object]:
         "radclient": os.path.isfile(settings.radclient_bin)
         and os.access(settings.radclient_bin, os.X_OK),
         "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
-        "migration_status": migration_current == "0006_customer_portal_backend_mvp",
+        "migration_status": migration_current == "0008_webhook_inbox",
     }
     ready = all(value for value in checks.values() if isinstance(value, bool))
     return {"status": "ready" if ready else "not_ready", "checks": checks}
