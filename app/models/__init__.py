@@ -4,6 +4,7 @@ from app.models.customer import Customer
 from app.models.customer_portal_account import CustomerPortalAccount
 from app.models.feature_flag import FeatureFlag
 from app.models.notification_setting import NotificationSetting
+from app.models.network_access_server import NetworkAccessServer
 from app.models.organization import Organization
 from app.models.organization_billing_profile import OrganizationBillingProfile
 from app.models.organization_role import OrganizationRole
@@ -33,6 +34,7 @@ __all__ = [
     "PaymentTransaction",
     "PaymentWebhookEvent",
     "NotificationSetting",
+    "NetworkAccessServer",
     "Platform",
     "RadAcct",
     "RadCheck",

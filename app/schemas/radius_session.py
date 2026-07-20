@@ -14,6 +14,11 @@ class RadiusSessionResponse(BaseModel):
     updated_at: Optional[datetime] = None
     input_octets: int = 0
     output_octets: int = 0
+    nas_id: Optional[int] = None
+    nas_name: Optional[str] = None
+    zone_id: Optional[int] = None
+    zone_name: Optional[str] = None
+    mapping_status: str = "unmapped"
 
 
 class RadiusDisconnectRequest(BaseModel):

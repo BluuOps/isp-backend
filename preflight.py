@@ -3,7 +3,7 @@ from __future__ import annotations
 from app import app
 from app.database import Base
 from app.core.config import settings
-from app.models import CustomerPortalAccount, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
+from app.models import CustomerPortalAccount, NetworkAccessServer, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
 from app.schemas import (
     CustomerAuthLoginRequest,
     CustomerAuthResponse,
@@ -71,6 +71,17 @@ def main() -> None:
         ("GET", "/organization/subscription"),
         ("GET", "/organization/feature-flags"),
         ("GET", "/organization/audit-logs"),
+        ("GET", "/organization/zones"),
+        ("POST", "/organization/zones"),
+        ("GET", "/organization/zones/{zone_id}"),
+        ("PUT", "/organization/zones/{zone_id}"),
+        ("DELETE", "/organization/zones/{zone_id}"),
+        ("GET", "/organization/nas"),
+        ("POST", "/organization/nas"),
+        ("GET", "/organization/nas/{nas_id}"),
+        ("PUT", "/organization/nas/{nas_id}"),
+        ("PATCH", "/organization/nas/{nas_id}/status"),
+        ("DELETE", "/organization/nas/{nas_id}"),
         ("GET", "/payments"),
         ("GET", "/payments/summary"),
         ("GET", "/payments/export"),
@@ -143,6 +154,7 @@ def main() -> None:
         "roles",
         "zones",
         "users",
+        "network_access_servers",
     }
     metadata_tables = set(Base.metadata.tables)
     missing_tables = expected_tables.difference(metadata_tables)
@@ -165,6 +177,7 @@ def main() -> None:
         RadAcct.__name__,
         PaymentTransaction.__name__,
         PaymentWebhookEvent.__name__,
+        NetworkAccessServer.__name__,
         CustomerPortalAccount.__name__,
         SupportTicket.__name__,
         TicketMessage.__name__,

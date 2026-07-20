@@ -11,7 +11,7 @@ from app.core.principal import require_organization_staff_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.core.errors import conflict
 from app.database import get_db
-from app.models import BillingAccount, Customer, RadCheck, RadReply, ServicePlan, User
+from app.models import BillingAccount, Customer, RadCheck, RadReply, ServicePlan, User, Zone
 from app.schemas import (
     UserActivateResponse,
     UserCreate,
@@ -65,6 +65,31 @@ def get_active_plan_or_400(plan_name: str, db: Session, organization_id: int) ->
             detail="Selected service plan does not exist or is inactive",
         )
     return plan
+
+
+def get_active_zone_or_400(zone_name: str, db: Session, organization_id: int) -> Zone:
+    normalized_name = zone_name.strip()
+    if not normalized_name or normalized_name.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select an active Zone by name, not by numeric ID",
+        )
+
+    zone = (
+        db.query(Zone)
+        .filter(
+            Zone.name == normalized_name,
+            Zone.organization_id == organization_id,
+            Zone.status == "active",
+        )
+        .first()
+    )
+    if not zone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Selected Zone does not exist or is inactive for this organization",
+        )
+    return zone
 
 
 def ensure_username_available(username: str, db: Session, user_id: int | None = None) -> None:
@@ -231,13 +256,14 @@ def create_user(
             detail="Selected CRM customer does not exist",
         )
 
+    zone_name = get_active_zone_or_400(payload.zone, db, organization.id).name if payload.zone else None
     user = User(
         organization_id=organization.id,
         username=payload.username,
         password=payload.password,
         customer_id=customer.id,
         service_plan=plan.name,
-        zone=payload.zone,
+        zone=zone_name,
         status=payload.status,
     )
 
@@ -294,7 +320,10 @@ def update_user(
         plan = get_active_plan_or_400(user.service_plan, db, organization.id)
 
     if "zone" in update_data:
-        user.zone = update_data["zone"]
+        if update_data["zone"] is None:
+            user.zone = None
+        else:
+            user.zone = get_active_zone_or_400(update_data["zone"], db, organization.id).name
 
     if "expiration_date" in update_data:
         if update_data["expiration_date"] is None:
