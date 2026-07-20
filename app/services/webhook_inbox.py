@@ -24,10 +24,6 @@ class WebhookInboxDuplicate(Exception):
         self.event = event
 
 
-class WebhookEnqueueError(RuntimeError):
-    pass
-
-
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -177,14 +173,3 @@ def claim_event_for_processing(db: Session, event_id: int) -> PaymentWebhookEven
         return None
     mark_processing(event)
     return event
-
-
-def enqueue_payment_webhook_event(event_id: int) -> None:
-    if not settings.workers_enabled:
-        return
-    try:
-        from app.workers.tasks import process_payment_webhook_event
-
-        process_payment_webhook_event.delay(event_id)
-    except Exception as exc:
-        raise WebhookEnqueueError(exc.__class__.__name__) from exc

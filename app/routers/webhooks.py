@@ -10,10 +10,10 @@ from app.integrations.paystack import PaystackGateway
 from app.services.audit import record_audit
 from app.services.webhook_inbox import (
     create_payment_webhook_event,
-    enqueue_payment_webhook_event,
     mark_ignored,
     mark_retry_pending,
 )
+from app.services.payment_webhook_processor import process_payment_webhook_event_by_id
 from app.models import PaymentWebhookEvent
 
 
@@ -88,20 +88,14 @@ async def paystack_webhook(
 
     db.commit()
 
-    if settings.workers_enabled:
-        try:
-            enqueue_payment_webhook_event(inbox_event.id)
-            (
-                db.query(PaymentWebhookEvent)
-                .filter(
-                    PaymentWebhookEvent.id == inbox_event.id,
-                    PaymentWebhookEvent.processing_status == "received",
-                )
-                .update({"processing_status": "queued", "last_error": None})
-            )
-            db.commit()
-        except Exception as exc:
-            mark_retry_pending(inbox_event, exc.__class__.__name__)
+    try:
+        process_payment_webhook_event_by_id(db, inbox_event.id)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        persisted_event = db.get(PaymentWebhookEvent, inbox_event.id)
+        if persisted_event is not None:
+            mark_retry_pending(persisted_event, exc.__class__.__name__)
             db.commit()
 
     return {"status": "ok"}

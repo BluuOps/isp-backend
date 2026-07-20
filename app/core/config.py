@@ -83,30 +83,6 @@ class Settings:
     payment_gateway: str = os.getenv("PAYMENT_GATEWAY", "manual").lower()
     payment_currency: str = os.getenv("PAYMENT_CURRENCY", "NGN").upper()
     payment_pending_timeout_minutes: int = int(os.getenv("PAYMENT_PENDING_TIMEOUT_MINUTES", "60"))
-    redis_url: str = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-    celery_broker_url: str = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/1")
-    celery_result_backend: str | None = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/2")
-    redis_enabled: bool = os.getenv("REDIS_ENABLED", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    workers_enabled: bool = os.getenv("WORKERS_ENABLED", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    rate_limit_enabled: bool = os.getenv("RATE_LIMIT_ENABLED", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    redis_key_prefix: str = os.getenv("REDIS_KEY_PREFIX", "radiusfiber:staging:")
-    redis_socket_timeout_seconds: float = float(os.getenv("REDIS_SOCKET_TIMEOUT_SECONDS", "2.0"))
-    redis_connect_timeout_seconds: float = float(os.getenv("REDIS_CONNECT_TIMEOUT_SECONDS", "2.0"))
     webhook_max_payload_bytes: int = int(os.getenv("WEBHOOK_MAX_PAYLOAD_BYTES", "262144"))
     webhook_max_processing_attempts: int = int(os.getenv("WEBHOOK_MAX_PROCESSING_ATTEMPTS", "5"))
 

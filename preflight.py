@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from app import app
 from app.database import Base
-from app.core.config import settings
 from app.models import CustomerPortalAccount, NetworkAccessServer, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
 from app.schemas import (
     CustomerAuthLoginRequest,
@@ -160,11 +159,6 @@ def main() -> None:
     missing_tables = expected_tables.difference(metadata_tables)
     if missing_tables:
         raise RuntimeError(f"Missing expected metadata tables: {', '.join(sorted(missing_tables))}")
-    if not settings.redis_url.startswith(("redis://", "rediss://")):
-        raise RuntimeError("REDIS_URL must start with redis:// or rediss://")
-    if not settings.celery_broker_url.startswith(("redis://", "rediss://")):
-        raise RuntimeError("CELERY_BROKER_URL must start with redis:// or rediss://")
-
     print("Preflight OK")
     print("Routes:", len(app.routes))
     print("Tables:", ", ".join(sorted(expected_tables)))
