@@ -49,7 +49,7 @@ def _paid_total(db: Session, organization_id: int, start_at: datetime) -> Decima
         db.query(func.coalesce(func.sum(PaymentTransaction.amount), 0))
         .filter(
             PaymentTransaction.organization_id == organization_id,
-            PaymentTransaction.payment_status == "paid",
+            PaymentTransaction.payment_status.in_(("paid", "successful")),
             PaymentTransaction.paid_at >= start_at,
         )
         .scalar()
@@ -66,7 +66,6 @@ def _payment_or_404(payment_id: int, db: Session, organization_id: int) -> Payme
     if not payment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment transaction not found")
     return payment
-
 
 def _validate_customer_and_user(payload: PaymentCreate, db: Session, organization_id: int) -> None:
     customer = (

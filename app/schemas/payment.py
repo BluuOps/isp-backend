@@ -5,8 +5,9 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-PAYMENT_STATUSES = {"pending", "paid", "failed", "reversed", "cancelled"}
-PAYMENT_METHODS = {"cash", "bank_transfer", "card", "pos", "ussd", "wallet", "manual", "other"}
+PAYMENT_STATUSES = {"initiated", "pending", "successful", "paid", "failed", "abandoned", "reversed", "refunded", "cancelled"}
+PAYMENT_METHODS = {"cash", "bank_transfer", "card", "pos", "ussd", "wallet", "manual", "paystack", "other"}
+PAYMENT_PURPOSES = {"subscription_renewal", "manual_payment", "installation", "equipment", "other"}
 
 
 class PaymentCreate(BaseModel):
@@ -18,6 +19,7 @@ class PaymentCreate(BaseModel):
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     payment_method: str = Field(..., min_length=1, max_length=50)
     payment_status: str = Field(default="paid", min_length=1, max_length=30)
+    payment_purpose: str = Field(default="manual_payment", min_length=1, max_length=50)
     paid_at: Optional[datetime] = None
     created_by_staff_id: Optional[int] = None
     created_by_customer_id: Optional[str] = Field(default=None, max_length=100)
@@ -45,6 +47,14 @@ class PaymentCreate(BaseModel):
         normalized = value.lower()
         if normalized not in PAYMENT_METHODS:
             raise ValueError(f"payment_method must be one of: {', '.join(sorted(PAYMENT_METHODS))}")
+        return normalized
+
+    @field_validator("payment_purpose")
+    @classmethod
+    def validate_purpose(cls, value: str) -> str:
+        normalized = value.lower()
+        if normalized not in PAYMENT_PURPOSES:
+            raise ValueError(f"payment_purpose must be one of: {', '.join(sorted(PAYMENT_PURPOSES))}")
         return normalized
 
     @field_validator("created_by_principal_type")
@@ -77,6 +87,20 @@ class PaymentResponse(BaseModel):
     currency: str
     payment_method: str
     payment_status: str
+    payment_purpose: str = "manual_payment"
+    gateway: Optional[str] = None
+    gateway_reference: Optional[str] = None
+    authorization_url: Optional[str] = None
+    access_code: Optional[str] = None
+    initiated_at: Optional[datetime] = None
+    verified_at: Optional[datetime] = None
+    failed_at: Optional[datetime] = None
+    renewal_processed_at: Optional[datetime] = None
+    renewal_cycles: int = 1
+    expected_amount: Optional[Decimal] = None
+    expected_currency: Optional[str] = None
+    old_expiration_date: Optional[datetime] = None
+    new_expiration_date: Optional[datetime] = None
     paid_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -94,3 +118,44 @@ class PaymentSummary(BaseModel):
     month_total: Decimal
     year_total: Decimal
     total_count: int
+
+
+class CustomerPaymentInitializeRequest(BaseModel):
+    service_id: int = Field(..., ge=1)
+    renewal_cycles: int = Field(default=1, ge=1, le=12)
+    idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=120)
+
+
+class CustomerPaymentInitializeResponse(BaseModel):
+    payment_id: int
+    transaction_reference: str
+    authorization_url: str
+    access_code: Optional[str] = None
+    amount: Decimal
+    currency: str
+    status: str
+    renewal_cycles: int
+
+
+class CustomerPaymentStatusResponse(BaseModel):
+    payment_id: int
+    transaction_reference: str
+    amount: Decimal
+    currency: str
+    status: str
+    gateway: Optional[str] = None
+    gateway_reference: Optional[str] = None
+    paid_at: Optional[datetime] = None
+    verified_at: Optional[datetime] = None
+    renewal_processed_at: Optional[datetime] = None
+    old_expiration_date: Optional[datetime] = None
+    new_expiration_date: Optional[datetime] = None
+
+
+class CustomerPaymentVerifyRequest(BaseModel):
+    reference: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class CustomerPaymentVerifyResponse(CustomerPaymentStatusResponse):
+    verified: bool = False
+    renewal_status: str = "pending"
