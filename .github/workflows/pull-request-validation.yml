@@ -1,0 +1,66 @@
+name: Backend pull request validation
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgresql://validation:validation@127.0.0.1:9/validation
+      JWT_SECRET: ci-validation-only
+      PAYSTACK_ENABLED: "false"
+      DEFAULT_ORGANIZATION_SLUG: smart-fiber
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install authoritative dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Reject tracked local or generated artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden="$(git ls-files | grep -E '(^|/)\.env$|(^|/)(venv|__pycache__|dist)/|\.(dump|tgz|tar\.gz|zip|log|pyc)$' || true)"
+          if [[ -n "$forbidden" ]]; then
+            printf 'Tracked local/generated artifacts found:\n%s\n' "$forbidden"
+            exit 1
+          fi
+          if git grep -nEI 'sk_(live|test)_[A-Za-z0-9]+|gh[pousr]_[A-Za-z0-9]+|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' -- ':!.github/workflows/pull-request-validation.yml'; then
+            echo "Secret-like material found in tracked source."
+            exit 1
+          fi
+
+      - name: Compile application and migrations
+        run: python -m compileall -q app alembic
+
+      - name: Import FastAPI and inspect routes
+        run: python -c "from app.main import app; print('IMPORT_OK', len(app.routes))"
+
+      - name: Inspect Alembic metadata
+        run: |
+          alembic heads
+          alembic branches
+          alembic history
+
+      - name: Run formal tests when present
+        shell: bash
+        run: |
+          if [[ -d tests ]]; then
+            python -m unittest discover -s tests -v
+          else
+            echo "::notice::No formal tests directory exists; isolated staging validation is recorded in the pull request."
+          fi
