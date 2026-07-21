@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.principal import require_organization_staff_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
-from app.models import RadAcct, RadCheck, User
+from app.models import NetworkAccessServer, RadAcct, RadCheck, User, Zone
 from app.schemas.radius_session import (
     RadiusDisconnectRequest,
     RadiusDisconnectResponse,
@@ -49,8 +49,20 @@ def list_active_sessions(
         .all()
     )
 
-    return [
-        RadiusSessionResponse(
+    responses = []
+    for row in rows:
+        mapping = (
+            db.query(NetworkAccessServer, Zone)
+            .join(Zone, Zone.id == NetworkAccessServer.zone_id)
+            .filter(
+                NetworkAccessServer.organization_id == organization.id,
+                Zone.organization_id == organization.id,
+                NetworkAccessServer.nas_ip_address == row.nasipaddress,
+            )
+            .first()
+        )
+        nas, zone = mapping if mapping else (None, None)
+        responses.append(RadiusSessionResponse(
             id=row.radacctid,
             session_id=row.acctsessionid,
             username=row.username or "",
@@ -60,9 +72,13 @@ def list_active_sessions(
             updated_at=row.acctupdatetime,
             input_octets=row.acctinputoctets or 0,
             output_octets=row.acctoutputoctets or 0,
-        )
-        for row in rows
-    ]
+            nas_id=nas.id if nas else None,
+            nas_name=nas.display_name if nas else None,
+            zone_id=zone.id if zone else None,
+            zone_name=zone.name if zone else None,
+            mapping_status="mapped" if nas else "unmapped",
+        ))
+    return responses
 
 
 @router.post(

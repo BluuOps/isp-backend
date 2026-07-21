@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app import app
 from app.database import Base
-from app.models import CustomerPortalAccount, PaymentTransaction, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
+from app.models import CustomerPortalAccount, NetworkAccessServer, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
 from app.schemas import (
     CustomerAuthLoginRequest,
     CustomerAuthResponse,
@@ -41,7 +41,10 @@ def main() -> None:
         ("GET", "/customer-portal/services/{service_id}"),
         ("GET", "/customer-portal/subscription"),
         ("GET", "/customer-portal/payments"),
+        ("POST", "/customer-portal/payments/initialize"),
         ("GET", "/customer-portal/payments/{payment_id}"),
+        ("GET", "/customer-portal/payments/{payment_id}/status"),
+        ("POST", "/customer-portal/payments/{payment_id}/verify"),
         ("GET", "/customer-portal/tickets"),
         ("POST", "/customer-portal/tickets"),
         ("GET", "/customer-portal/tickets/{ticket_id}"),
@@ -67,6 +70,17 @@ def main() -> None:
         ("GET", "/organization/subscription"),
         ("GET", "/organization/feature-flags"),
         ("GET", "/organization/audit-logs"),
+        ("GET", "/organization/zones"),
+        ("POST", "/organization/zones"),
+        ("GET", "/organization/zones/{zone_id}"),
+        ("PUT", "/organization/zones/{zone_id}"),
+        ("DELETE", "/organization/zones/{zone_id}"),
+        ("GET", "/organization/nas"),
+        ("POST", "/organization/nas"),
+        ("GET", "/organization/nas/{nas_id}"),
+        ("PUT", "/organization/nas/{nas_id}"),
+        ("PATCH", "/organization/nas/{nas_id}/status"),
+        ("DELETE", "/organization/nas/{nas_id}"),
         ("GET", "/payments"),
         ("GET", "/payments/summary"),
         ("GET", "/payments/export"),
@@ -97,6 +111,8 @@ def main() -> None:
         ("PUT", "/billing/users/{user_id}"),
         ("GET", "/radius/sessions"),
         ("POST", "/radius/disconnect"),
+        ("POST", "/webhooks/payments/paystack"),
+        ("POST", "/webhooks/payments/paystack/{integration_key}"),
     }
     missing_routes = required_routes.difference(route_inventory)
     if missing_routes:
@@ -124,6 +140,7 @@ def main() -> None:
         "organization_billing_profiles",
         "notification_settings",
         "payment_transactions",
+        "payment_webhook_events",
         "customer_portal_accounts",
         "support_tickets",
         "ticket_messages",
@@ -136,12 +153,12 @@ def main() -> None:
         "roles",
         "zones",
         "users",
+        "network_access_servers",
     }
     metadata_tables = set(Base.metadata.tables)
     missing_tables = expected_tables.difference(metadata_tables)
     if missing_tables:
         raise RuntimeError(f"Missing expected metadata tables: {', '.join(sorted(missing_tables))}")
-
     print("Preflight OK")
     print("Routes:", len(app.routes))
     print("Tables:", ", ".join(sorted(expected_tables)))
@@ -153,6 +170,8 @@ def main() -> None:
         RadReply.__name__,
         RadAcct.__name__,
         PaymentTransaction.__name__,
+        PaymentWebhookEvent.__name__,
+        NetworkAccessServer.__name__,
         CustomerPortalAccount.__name__,
         SupportTicket.__name__,
         TicketMessage.__name__,

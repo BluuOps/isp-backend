@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -8,6 +8,9 @@ class PaymentTransaction(Base):
     __tablename__ = "payment_transactions"
     __table_args__ = (
         UniqueConstraint("organization_id", "transaction_reference", name="uq_payment_org_transaction_reference"),
+        UniqueConstraint("organization_id", "idempotency_key", name="uq_payment_org_idempotency_key"),
+        Index("ix_payment_org_gateway_reference", "organization_id", "gateway", "gateway_reference"),
+        Index("ix_payment_org_status", "organization_id", "payment_status"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -20,6 +23,25 @@ class PaymentTransaction(Base):
     currency = Column(String(3), nullable=False, default="NGN")
     payment_method = Column(String(50), nullable=False)
     payment_status = Column(String(30), nullable=False, default="pending", index=True)
+    payment_purpose = Column(String(50), nullable=False, default="manual_payment", index=True)
+    gateway = Column(String(50), nullable=True, index=True)
+    gateway_reference = Column(String(255), nullable=True, index=True)
+    authorization_url = Column(Text, nullable=True)
+    access_code = Column(String(255), nullable=True)
+    idempotency_key = Column(String(120), nullable=True, index=True)
+    initiated_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
+    abandoned_at = Column(DateTime(timezone=True), nullable=True)
+    reversed_at = Column(DateTime(timezone=True), nullable=True)
+    raw_gateway_status = Column(String(100), nullable=True)
+    gateway_metadata = Column(JSON, nullable=True)
+    renewal_processed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    renewal_cycles = Column(Integer, nullable=False, default=1)
+    expected_amount = Column(Numeric(12, 2), nullable=True)
+    expected_currency = Column(String(3), nullable=True)
+    old_expiration_date = Column(DateTime(timezone=True), nullable=True)
+    new_expiration_date = Column(DateTime(timezone=True), nullable=True)
     paid_at = Column(DateTime(timezone=True), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)

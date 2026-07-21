@@ -4,11 +4,13 @@ from app.models.customer import Customer
 from app.models.customer_portal_account import CustomerPortalAccount
 from app.models.feature_flag import FeatureFlag
 from app.models.notification_setting import NotificationSetting
+from app.models.network_access_server import NetworkAccessServer
 from app.models.organization import Organization
 from app.models.organization_billing_profile import OrganizationBillingProfile
 from app.models.organization_role import OrganizationRole
 from app.models.organization_staff import OrganizationStaff
 from app.models.payment import PaymentTransaction
+from app.models.payment_webhook_event import PaymentWebhookEvent
 from app.models.platform import Platform
 from app.models.radacct import RadAcct
 from app.models.radius import RadCheck, RadReply
@@ -30,7 +32,9 @@ __all__ = [
     "OrganizationRole",
     "OrganizationStaff",
     "PaymentTransaction",
+    "PaymentWebhookEvent",
     "NotificationSetting",
+    "NetworkAccessServer",
     "Platform",
     "RadAcct",
     "RadCheck",

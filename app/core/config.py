@@ -68,6 +68,38 @@ class Settings:
         for item in os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1,::1").split(",")
         if item.strip()
     )
+    paystack_enabled: bool = os.getenv("PAYSTACK_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    paystack_mode: str = os.getenv("PAYSTACK_MODE", "test").lower()
+    paystack_secret_key: str | None = os.getenv("PAYSTACK_SECRET_KEY")
+    paystack_public_key: str | None = os.getenv("PAYSTACK_PUBLIC_KEY")
+    paystack_base_url: str = os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co").rstrip("/")
+    paystack_callback_base_url: str | None = os.getenv("PAYSTACK_CALLBACK_BASE_URL")
+    paystack_webhook_route_token: str | None = os.getenv("PAYSTACK_WEBHOOK_ROUTE_TOKEN")
+    payment_gateway: str = os.getenv("PAYMENT_GATEWAY", "manual").lower()
+    payment_currency: str = os.getenv("PAYMENT_CURRENCY", "NGN").upper()
+    payment_pending_timeout_minutes: int = int(os.getenv("PAYMENT_PENDING_TIMEOUT_MINUTES", "60"))
+    webhook_max_payload_bytes: int = int(os.getenv("WEBHOOK_MAX_PAYLOAD_BYTES", "262144"))
+    webhook_max_processing_attempts: int = int(os.getenv("WEBHOOK_MAX_PROCESSING_ATTEMPTS", "5"))
+
+    def require_paystack(self) -> None:
+        if not self.paystack_enabled:
+            return
+        missing = [
+            name
+            for name, value in {
+                "PAYSTACK_SECRET_KEY": self.paystack_secret_key,
+                "PAYSTACK_PUBLIC_KEY": self.paystack_public_key,
+                "PAYSTACK_CALLBACK_BASE_URL": self.paystack_callback_base_url,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(f"Paystack is enabled but missing required configuration: {', '.join(missing)}")
 
 
 settings = Settings()

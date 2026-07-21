@@ -37,7 +37,17 @@ from app.schemas.customer_portal import (
     CustomerPortalTicketMessageResponse,
     CustomerPortalTicketResponse,
 )
+from app.schemas.payment import (
+    CustomerPaymentInitializeRequest,
+    CustomerPaymentInitializeResponse,
+    CustomerPaymentStatusResponse,
+    CustomerPaymentVerifyRequest,
+    CustomerPaymentVerifyResponse,
+)
 from app.services.audit import record_audit
+from app.integrations.base import GatewayVerifyResult, PaymentGatewayError
+from app.integrations.paystack import PaystackGateway
+from app.services.payment_service import initialize_customer_renewal, process_verified_payment
 
 
 router = APIRouter(prefix="/customer-portal", tags=["Customer Portal"])
@@ -183,6 +193,39 @@ def _payment_summary(payment: PaymentTransaction) -> CustomerPortalPaymentSummar
         payment_status=payment.payment_status,
         paid_at=payment.paid_at,
         created_at=payment.created_at,
+    )
+
+
+def _payment_status_response(payment: PaymentTransaction) -> CustomerPaymentStatusResponse:
+    return CustomerPaymentStatusResponse(
+        payment_id=payment.id,
+        transaction_reference=payment.transaction_reference,
+        amount=payment.amount,
+        currency=payment.currency,
+        status=payment.payment_status,
+        gateway=payment.gateway,
+        gateway_reference=payment.gateway_reference,
+        paid_at=payment.paid_at,
+        verified_at=payment.verified_at,
+        renewal_processed_at=payment.renewal_processed_at,
+        old_expiration_date=payment.old_expiration_date,
+        new_expiration_date=payment.new_expiration_date,
+    )
+
+
+def _payment_verify_response(payment: PaymentTransaction) -> CustomerPaymentVerifyResponse:
+    metadata = payment.gateway_metadata or {}
+    renewal_status = metadata.get("renewal_status")
+    if not renewal_status:
+        renewal_status = (
+            "completed"
+            if payment.renewal_processed_at
+            else ("pending" if payment.payment_status in {"initiated", "pending"} else payment.payment_status)
+        )
+    return CustomerPaymentVerifyResponse(
+        **_payment_status_response(payment).model_dump(),
+        verified=payment.payment_status in {"successful", "paid"},
+        renewal_status=renewal_status,
     )
 
 
@@ -431,6 +474,50 @@ def list_payments(
     return [_payment_summary(row) for row in rows]
 
 
+@router.post("/payments/initialize", response_model=CustomerPaymentInitializeResponse)
+def initialize_payment(
+    payload: CustomerPaymentInitializeRequest,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPaymentInitializeResponse:
+    service = (
+        db.query(User)
+        .filter(
+            User.id == payload.service_id,
+            User.organization_id == context.organization.id,
+            User.customer_id == context.customer.id,
+        )
+        .first()
+    )
+    if not service:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+
+    try:
+        payment = initialize_customer_renewal(
+            db,
+            account=context.account,
+            customer=context.customer,
+            service=service,
+            renewal_cycles=payload.renewal_cycles,
+            idempotency_key=payload.idempotency_key,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(payment)
+    return CustomerPaymentInitializeResponse(
+        payment_id=payment.id,
+        transaction_reference=payment.transaction_reference,
+        authorization_url=payment.authorization_url or "",
+        access_code=payment.access_code,
+        amount=payment.amount,
+        currency=payment.currency,
+        status=payment.payment_status,
+        renewal_cycles=payment.renewal_cycles,
+    )
+
+
 @router.get("/payments/{payment_id}", response_model=CustomerPortalPaymentDetail)
 def get_payment(
     payment_id: int,
@@ -458,6 +545,124 @@ def get_payment(
         user_id=payment.user_id,
         notes=payment.notes,
     )
+
+
+@router.get("/payments/{payment_id}/status", response_model=CustomerPaymentStatusResponse)
+def get_payment_status(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPaymentStatusResponse:
+    payment = (
+        db.query(PaymentTransaction)
+        .filter(
+            PaymentTransaction.id == payment_id,
+            PaymentTransaction.organization_id == context.organization.id,
+            PaymentTransaction.customer_id == context.customer.id,
+        )
+        .first()
+    )
+    if not payment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
+    return _payment_status_response(payment)
+
+
+@router.post("/payments/{payment_id}/verify", response_model=CustomerPaymentVerifyResponse)
+def verify_payment(
+    payment_id: int,
+    payload: CustomerPaymentVerifyRequest | None = None,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPaymentVerifyResponse:
+    payment = (
+        db.query(PaymentTransaction)
+        .filter(
+            PaymentTransaction.id == payment_id,
+            PaymentTransaction.organization_id == context.organization.id,
+            PaymentTransaction.customer_id == context.customer.id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if not payment:
+        _record_customer_audit(
+            db,
+            context,
+            action="payment.verification_denied",
+            target_type="payment",
+            target_id=str(payment_id),
+            success=False,
+        )
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
+    if payment.gateway != "paystack":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only Paystack payments can be verified here")
+    if payload and payload.reference and payload.reference != payment.transaction_reference:
+        _record_customer_audit(
+            db,
+            context,
+            action="payment.verification_failed",
+            target_type="payment",
+            target_id=payment.transaction_reference,
+            success=False,
+            new_value={"reason": "reference_mismatch"},
+        )
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Payment reference mismatch")
+
+    _record_customer_audit(
+        db,
+        context,
+        action="payment.verification_requested",
+        target_type="payment",
+        target_id=payment.transaction_reference,
+        new_value={"gateway": "paystack"},
+    )
+
+    if payment.payment_status in {"successful", "paid"}:
+        process_verified_payment(
+            db,
+            payment=payment,
+            verification=GatewayVerifyResult(
+                reference=payment.transaction_reference,
+                status="success",
+                amount=payment.expected_amount or payment.amount,
+                currency=payment.expected_currency or payment.currency,
+                gateway_reference=payment.gateway_reference,
+                raw_status=payment.raw_gateway_status or "success",
+                metadata={},
+            ),
+        )
+        db.commit()
+        db.refresh(payment)
+        return _payment_verify_response(payment)
+
+    gateway = PaystackGateway()
+    try:
+        verification = gateway.verify_transaction(payment.transaction_reference)
+        process_verified_payment(db, payment=payment, verification=verification)
+        db.commit()
+    except PaymentGatewayError as exc:
+        _record_customer_audit(
+            db,
+            context,
+            action="payment.verification_failed",
+            target_type="payment",
+            target_id=payment.transaction_reference,
+            success=False,
+            new_value={"code": exc.code},
+        )
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Payment verification failed") from exc
+    except HTTPException:
+        db.commit()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(payment)
+    return _payment_verify_response(payment)
 
 
 @router.get("/tickets", response_model=list[CustomerPortalTicketResponse])
@@ -521,7 +726,6 @@ def create_ticket(
     db.commit()
     db.refresh(ticket)
     return _ticket_response(db, ticket, include_messages=True)
-
 
 @router.get("/tickets/{ticket_id}", response_model=CustomerPortalTicketResponse)
 def get_ticket(
