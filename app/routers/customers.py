@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.authorization import Permission, require_permission
 from app.core.errors import conflict
-from app.core.principal import require_organization_staff_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import Customer, Organization, User
@@ -14,7 +14,7 @@ from app.services.audit import record_audit
 from app.services.limits import enforce_limit
 
 
-router = APIRouter(prefix="/customers", tags=["CRM Customers"], dependencies=[Depends(require_organization_staff_principal)])
+router = APIRouter(prefix="/customers", tags=["CRM Customers"])
 
 
 def customer_to_response(customer: Customer, organization: OrganizationContext) -> CustomerResponse:
@@ -65,7 +65,11 @@ def apply_customer_payload(
     customer.online = payload.online
 
 
-@router.get("", response_model=List[CustomerResponse])
+@router.get(
+    "",
+    response_model=List[CustomerResponse],
+    dependencies=[Depends(require_permission(Permission.CUSTOMERS_READ))],
+)
 def list_customers(
     db: Session = Depends(get_db),
     organization: OrganizationContext = Depends(get_organization_context),
@@ -79,7 +83,12 @@ def list_customers(
     return [customer_to_response(customer, organization) for customer in customers]
 
 
-@router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=CustomerResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.CUSTOMERS_CREATE))],
+)
 def create_customer(
     payload: CustomerCreate,
     db: Session = Depends(get_db),
@@ -112,7 +121,11 @@ def create_customer(
     return customer_to_response(customer, organization)
 
 
-@router.get("/{customer_id}", response_model=CustomerResponse)
+@router.get(
+    "/{customer_id}",
+    response_model=CustomerResponse,
+    dependencies=[Depends(require_permission(Permission.CUSTOMERS_READ))],
+)
 def get_customer(
     customer_id: str,
     db: Session = Depends(get_db),
@@ -128,7 +141,11 @@ def get_customer(
     return customer_to_response(customer, organization)
 
 
-@router.put("/{customer_id}", response_model=CustomerResponse)
+@router.put(
+    "/{customer_id}",
+    response_model=CustomerResponse,
+    dependencies=[Depends(require_permission(Permission.CUSTOMERS_UPDATE))],
+)
 def update_customer(
     customer_id: str,
     payload: CustomerUpdate,
@@ -160,7 +177,11 @@ def update_customer(
     return customer_to_response(customer, organization)
 
 
-@router.delete("/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{customer_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.CUSTOMERS_DELETE))],
+)
 def delete_customer(
     customer_id: str,
     db: Session = Depends(get_db),

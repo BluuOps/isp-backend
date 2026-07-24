@@ -11,8 +11,13 @@ from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.authorization import (
+    AuthenticatedPrincipal,
+    Permission,
+    get_authenticated_principal,
+    require_permission,
+)
 from app.core.errors import conflict
-from app.core.principal import require_organization_staff_principal
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import BillingAccount, Customer, OrganizationStaff, PaymentTransaction, User
@@ -20,7 +25,7 @@ from app.schemas import PaymentCreate, PaymentResponse, PaymentSummary
 from app.services.audit import record_audit
 
 
-router = APIRouter(prefix="/payments", tags=["Payments"], dependencies=[Depends(require_organization_staff_principal)])
+router = APIRouter(prefix="/payments", tags=["Payments"])
 
 
 def _utc_now() -> datetime:
@@ -115,7 +120,11 @@ def _payment_query(db: Session, organization_id: int):
     return db.query(PaymentTransaction).filter(PaymentTransaction.organization_id == organization_id)
 
 
-@router.get("", response_model=list[PaymentResponse])
+@router.get(
+    "",
+    response_model=list[PaymentResponse],
+    dependencies=[Depends(require_permission(Permission.PAYMENTS_READ))],
+)
 def list_payments(
     search: Optional[str] = Query(default=None, max_length=120),
     status_filter: Optional[str] = Query(default=None, alias="status", max_length=30),
@@ -140,7 +149,11 @@ def list_payments(
     return query.order_by(PaymentTransaction.created_at.desc()).offset(offset).limit(limit).all()
 
 
-@router.get("/summary", response_model=PaymentSummary)
+@router.get(
+    "/summary",
+    response_model=PaymentSummary,
+    dependencies=[Depends(require_permission(Permission.PAYMENTS_READ))],
+)
 def payment_summary(
     db: Session = Depends(get_db),
     organization: OrganizationContext = Depends(get_organization_context),
@@ -156,7 +169,10 @@ def payment_summary(
     )
 
 
-@router.get("/export")
+@router.get(
+    "/export",
+    dependencies=[Depends(require_permission(Permission.PAYMENTS_EXPORT))],
+)
 def export_payments(
     db: Session = Depends(get_db),
     organization: OrganizationContext = Depends(get_organization_context),
@@ -210,7 +226,11 @@ def export_payments(
     )
 
 
-@router.get("/{payment_id}", response_model=PaymentResponse)
+@router.get(
+    "/{payment_id}",
+    response_model=PaymentResponse,
+    dependencies=[Depends(require_permission(Permission.PAYMENTS_READ))],
+)
 def get_payment(
     payment_id: int,
     db: Session = Depends(get_db),
@@ -219,11 +239,17 @@ def get_payment(
     return _payment_or_404(payment_id, db, organization.id)
 
 
-@router.post("", response_model=PaymentResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=PaymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.PAYMENTS_CREATE))],
+)
 def create_payment(
     payload: PaymentCreate,
     db: Session = Depends(get_db),
     organization: OrganizationContext = Depends(get_organization_context),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ) -> PaymentTransaction:
     _validate_customer_and_user(payload, db, organization.id)
     duplicate = (
@@ -252,11 +278,11 @@ def create_payment(
         payment_method=payload.payment_method,
         payment_status=payload.payment_status,
         paid_at=paid_at,
-        created_by_staff_id=payload.created_by_staff_id,
-        created_by_customer_id=payload.created_by_customer_id,
-        created_by_principal_type=payload.created_by_principal_type or ("organization_staff" if payload.created_by_staff_id else "customer" if payload.created_by_customer_id else "system"),
-        recorded_by_label=payload.recorded_by_label,
-        created_by=payload.created_by,
+        created_by_staff_id=int(principal.subject_id.split(":", 1)[1]),
+        created_by_customer_id=None,
+        created_by_principal_type="organization_staff",
+        recorded_by_label=principal.actor_label,
+        created_by=principal.actor_label,
         notes=payload.notes,
     )
 
@@ -273,10 +299,10 @@ def create_payment(
         record_audit(
             db,
             organization_id=organization.id,
-            actor=payload.created_by or payload.recorded_by_label or "internal-admin",
-            actor_type=payment.created_by_principal_type or "organization_staff",
-            actor_id=str(payment.created_by_staff_id or payment.created_by_customer_id or "internal-admin"),
-            actor_label=payload.recorded_by_label or payload.created_by,
+            actor=principal.actor_label,
+            actor_type="organization_staff",
+            actor_id=principal.subject_id,
+            actor_label=principal.actor_label,
             action="payment.created",
             target_type="payment",
             target_id=payload.transaction_reference,

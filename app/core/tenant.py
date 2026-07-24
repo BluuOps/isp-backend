@@ -1,9 +1,13 @@
 from dataclasses import dataclass
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.principal import require_organization_staff_principal
+from app.core.authorization import (
+    AuthenticatedPrincipal,
+    PrincipalType,
+    get_authenticated_principal,
+)
 from app.database import get_db
 from app.models.organization import Organization
 
@@ -32,21 +36,20 @@ def _claim_list(value: object) -> tuple[str, ...]:
 
 def get_organization_context(
     db: Session = Depends(get_db),
-    authorization: str | None = Header(default=None),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ) -> OrganizationContext:
-    principal = require_organization_staff_principal(authorization)
-    organization_id = principal.get("organization_id")
-    organization_slug = str(principal.get("organization_slug") or "")
-    try:
-        normalized_organization_id = int(organization_id)
-    except (TypeError, ValueError) as exc:
+    if (
+        principal.principal_type != PrincipalType.ORGANIZATION_STAFF
+        or principal.organization_id is None
+        or not principal.organization_slug
+    ):
         raise _tenant_error(
-            status.HTTP_401_UNAUTHORIZED,
-            "invalid_organization_claims",
-            "Organization staff token has invalid organization claims.",
-        ) from exc
+            status.HTTP_403_FORBIDDEN,
+            "wrong_principal_type",
+            "Organization staff access is required.",
+        )
 
-    organization = db.query(Organization).filter(Organization.id == normalized_organization_id).first()
+    organization = db.query(Organization).filter(Organization.id == principal.organization_id).first()
     if not organization:
         raise _tenant_error(
             status.HTTP_403_FORBIDDEN,
@@ -59,7 +62,7 @@ def get_organization_context(
             "organization_inactive",
             "Organization is not active.",
         )
-    if organization.slug != organization_slug:
+    if organization.slug != principal.organization_slug:
         raise _tenant_error(
             status.HTTP_401_UNAUTHORIZED,
             "stale_organization_token",
@@ -70,7 +73,7 @@ def get_organization_context(
         id=organization.id,
         slug=organization.slug,
         name=organization.name,
-        principal_id=str(principal.get("sub") or ""),
-        roles=_claim_list(principal.get("roles")),
-        permissions=_claim_list(principal.get("permissions")),
+        principal_id=principal.subject_id,
+        roles=(principal.organization_role,) if principal.organization_role else (),
+        permissions=tuple(sorted(principal.effective_permissions)),
     )

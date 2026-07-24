@@ -31,6 +31,11 @@ class Settings:
     )
     smtp_url: str | None = os.getenv("SMTP_URL")
     jwt_secret: str | None = os.getenv("JWT_SECRET")
+    auth_token_issuer: str = os.getenv("AUTH_TOKEN_ISSUER", "radiusfiber")
+    auth_token_audience: str = os.getenv(
+        "AUTH_TOKEN_AUDIENCE",
+        "radiusfiber-organization-api",
+    )
     platform_admin_api_key: str | None = os.getenv("PLATFORM_ADMIN_API_KEY")
     platform_admin_email: str | None = os.getenv("PLATFORM_ADMIN_EMAIL")
     platform_admin_password: str | None = os.getenv("PLATFORM_ADMIN_PASSWORD")
