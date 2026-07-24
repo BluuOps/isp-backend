@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -6,11 +6,15 @@ from app.database import Base
 
 class Organization(Base):
     __tablename__ = "organizations"
+    __table_args__ = (
+        UniqueConstraint("slug", name="organizations_slug_key"),
+        Index("ix_organizations_slug", "slug", unique=True),
+    )
 
     id = Column(Integer, primary_key=True)
-    platform_id = Column(Integer, ForeignKey("platform.id"), nullable=False, index=True)
+    platform_id = Column(Integer, ForeignKey("platform.id"), nullable=False)
     name = Column(String(200), nullable=False)
-    slug = Column(String(100), nullable=False, unique=True, index=True)
+    slug = Column(String(100), nullable=False)
     status = Column(String(50), nullable=False, default="active")
     company_email = Column(String(255))
     company_phone = Column(String(50))
