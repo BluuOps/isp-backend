@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.principal import require_organization_staff_principal
+from app.core.authorization import Permission, require_permission
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import NetworkAccessServer, RadAcct, User, Zone
@@ -22,7 +22,6 @@ from app.services.audit import record_audit
 router = APIRouter(
     prefix="/organization",
     tags=["Organization Network Inventory"],
-    dependencies=[Depends(require_organization_staff_principal)],
 )
 
 
@@ -145,7 +144,11 @@ def _zone_response(zone: Zone, db: Session, *, detail: bool = False) -> ZoneResp
     return ZoneResponse(**data)
 
 
-@router.get("/zones", response_model=list[ZoneResponse])
+@router.get(
+    "/zones",
+    response_model=list[ZoneResponse],
+    dependencies=[Depends(require_permission(Permission.NETWORK_ZONES_READ))],
+)
 def list_zones(
     db: Session = Depends(get_db),
     context: OrganizationContext = Depends(get_organization_context),
@@ -154,7 +157,11 @@ def list_zones(
     return [_zone_response(zone, db) for zone in zones]
 
 
-@router.get("/zones/{zone_id}", response_model=ZoneDetailResponse)
+@router.get(
+    "/zones/{zone_id}",
+    response_model=ZoneDetailResponse,
+    dependencies=[Depends(require_permission(Permission.NETWORK_ZONES_READ))],
+)
 def get_zone(
     zone_id: int,
     db: Session = Depends(get_db),
@@ -163,7 +170,12 @@ def get_zone(
     return _zone_response(_zone_or_404(zone_id, db, context), db, detail=True)
 
 
-@router.post("/zones", response_model=ZoneDetailResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/zones",
+    response_model=ZoneDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.NETWORK_ZONES_CREATE))],
+)
 def create_zone(
     payload: ZoneCreate,
     db: Session = Depends(get_db),
@@ -190,7 +202,11 @@ def create_zone(
     return _zone_response(zone, db, detail=True)
 
 
-@router.put("/zones/{zone_id}", response_model=ZoneDetailResponse)
+@router.put(
+    "/zones/{zone_id}",
+    response_model=ZoneDetailResponse,
+    dependencies=[Depends(require_permission(Permission.NETWORK_ZONES_UPDATE))],
+)
 def update_zone(
     zone_id: int,
     payload: ZoneUpdate,
@@ -226,7 +242,11 @@ def update_zone(
     return _zone_response(zone, db, detail=True)
 
 
-@router.delete("/zones/{zone_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/zones/{zone_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.NETWORK_ZONES_DELETE))],
+)
 def delete_zone(
     zone_id: int,
     db: Session = Depends(get_db),
@@ -265,7 +285,11 @@ def delete_zone(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/nas", response_model=list[NasResponse])
+@router.get(
+    "/nas",
+    response_model=list[NasResponse],
+    dependencies=[Depends(require_permission(Permission.NETWORK_NAS_READ))],
+)
 def list_nas(
     db: Session = Depends(get_db),
     context: OrganizationContext = Depends(get_organization_context),
@@ -283,7 +307,11 @@ def list_nas(
     return [_nas_response(nas, zone, db) for nas, zone in rows]
 
 
-@router.get("/nas/{nas_id}", response_model=NasResponse)
+@router.get(
+    "/nas/{nas_id}",
+    response_model=NasResponse,
+    dependencies=[Depends(require_permission(Permission.NETWORK_NAS_READ))],
+)
 def get_nas(
     nas_id: int,
     db: Session = Depends(get_db),
@@ -294,7 +322,12 @@ def get_nas(
     return _nas_response(nas, zone, db)
 
 
-@router.post("/nas", response_model=NasResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/nas",
+    response_model=NasResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.NETWORK_NAS_CREATE))],
+)
 def create_nas(
     payload: NasCreate,
     db: Session = Depends(get_db),
@@ -329,7 +362,11 @@ def create_nas(
     return _nas_response(nas, zone, db)
 
 
-@router.put("/nas/{nas_id}", response_model=NasResponse)
+@router.put(
+    "/nas/{nas_id}",
+    response_model=NasResponse,
+    dependencies=[Depends(require_permission(Permission.NETWORK_NAS_UPDATE))],
+)
 def update_nas(
     nas_id: int,
     payload: NasUpdate,
@@ -367,7 +404,11 @@ def update_nas(
     return _nas_response(nas, zone, db)
 
 
-@router.patch("/nas/{nas_id}/status", response_model=NasResponse)
+@router.patch(
+    "/nas/{nas_id}/status",
+    response_model=NasResponse,
+    dependencies=[Depends(require_permission(Permission.NETWORK_NAS_UPDATE))],
+)
 def update_nas_status(
     nas_id: int,
     payload: NasStatusUpdate,
@@ -377,7 +418,11 @@ def update_nas_status(
     return update_nas(nas_id, NasUpdate(status=payload.status), db, context)
 
 
-@router.delete("/nas/{nas_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/nas/{nas_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.NETWORK_NAS_DELETE))],
+)
 def delete_nas(
     nas_id: int,
     db: Session = Depends(get_db),

@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import secrets
 
@@ -22,9 +23,11 @@ def verify_password(password: str, password_hash: str) -> bool:
         if algorithm != "pbkdf2_sha256":
             return False
         iterations = int(iterations_raw)
+        if iterations < 100_000 or iterations > 1_000_000:
+            return False
         salt = base64.urlsafe_b64decode(salt_raw.encode())
         expected = base64.urlsafe_b64decode(digest_raw.encode())
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, binascii.Error):
         return False
 
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
