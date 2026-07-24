@@ -7,6 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.authorization import (
+    AuthenticatedPrincipal,
+    Permission,
+    get_authenticated_principal,
+    require_permission,
+)
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.core.errors import conflict
 from app.database import get_db
@@ -202,7 +208,11 @@ def apply_radius_lifecycle(
     )
 
 
-@router.get("/", response_model=List[UserResponse])
+@router.get(
+    "/",
+    response_model=List[UserResponse],
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_READ))],
+)
 def list_users(
     db: Session = Depends(get_db),
     organization: OrganizationContext = Depends(get_organization_context),
@@ -212,7 +222,12 @@ def list_users(
     ).order_by(User.id.asc()).all()
 
 
-@router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_CREATE))],
+)
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),
@@ -267,15 +282,53 @@ def create_user(
     return user
 
 
-@router.put("/{user_id}", response_model=UserResponse)
+@router.put(
+    "/{user_id}",
+    response_model=UserResponse,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_UPDATE))],
+)
 def update_user(
     user_id: int,
     payload: UserUpdate,
     db: Session = Depends(get_db),
     organization: OrganizationContext = Depends(get_organization_context),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ) -> User:
     user = get_user_or_404(user_id, db, organization.id)
     update_data = payload.model_dump(exclude_unset=True)
+    if "customer_id" in update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Customer reassignment requires a dedicated authorized operation",
+        )
+    if (
+        "password" in update_data
+        and not principal.has_permission(Permission.SUBSCRIBERS_PASSWORD_CHANGE)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permission to change subscriber credentials",
+        )
+    if (
+        "service_plan" in update_data
+        and not principal.has_permission(Permission.SUBSCRIBERS_PLAN_CHANGE)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permission to change subscriber plan",
+        )
+    requested_status = update_data.get("status")
+    status_permission = {
+        STATUS_SUSPENDED: Permission.SUBSCRIBERS_SUSPEND,
+        STATUS_ACTIVE: Permission.SUBSCRIBERS_RECONNECT,
+        STATUS_PENDING: Permission.SUBSCRIBERS_UPDATE,
+        STATUS_TERMINATED: Permission.SUBSCRIBERS_DELETE,
+    }.get(requested_status)
+    if status_permission and not principal.has_permission(status_permission):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permission for subscriber lifecycle change",
+        )
     old_username = user.username
     old = {"username": user.username, "service_plan": user.service_plan, "status": user.status, "zone": user.zone}
 
@@ -336,7 +389,11 @@ def update_user(
     return user
 
 
-@router.post("/{user_id}/recharge", response_model=UserResponse)
+@router.post(
+    "/{user_id}/recharge",
+    response_model=UserResponse,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_RECHARGE))],
+)
 def recharge_user(
     user_id: int,
     payload: UserRecharge,
@@ -408,7 +465,11 @@ def recharge_user(
     return user
 
 
-@router.put("/{user_id}/suspend", response_model=UserSuspendResponse)
+@router.put(
+    "/{user_id}/suspend",
+    response_model=UserSuspendResponse,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_SUSPEND))],
+)
 def suspend_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserSuspendResponse:
     user = get_user_or_404(user_id, db, organization.id)
     plan = get_active_plan_or_400(user.service_plan, db, organization.id)
@@ -441,7 +502,11 @@ def suspend_user(user_id: int, db: Session = Depends(get_db), organization: Orga
     )
 
 
-@router.put("/{user_id}/activate", response_model=UserActivateResponse)
+@router.put(
+    "/{user_id}/activate",
+    response_model=UserActivateResponse,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_RECONNECT))],
+)
 def activate_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserActivateResponse:
     user = get_user_or_404(user_id, db, organization.id)
     plan = get_active_plan_or_400(user.service_plan, db, organization.id)
@@ -474,7 +539,11 @@ def activate_user(user_id: int, db: Session = Depends(get_db), organization: Org
     )
 
 
-@router.put("/{user_id}/pending", response_model=UserPendingResponse)
+@router.put(
+    "/{user_id}/pending",
+    response_model=UserPendingResponse,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_UPDATE))],
+)
 def mark_user_pending(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserPendingResponse:
     user = get_user_or_404(user_id, db, organization.id)
     try:
@@ -504,7 +573,11 @@ def mark_user_pending(user_id: int, db: Session = Depends(get_db), organization:
     )
 
 
-@router.put("/{user_id}/terminate", response_model=UserTerminateResponse)
+@router.put(
+    "/{user_id}/terminate",
+    response_model=UserTerminateResponse,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_DELETE))],
+)
 def terminate_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserTerminateResponse:
     user = get_user_or_404(user_id, db, organization.id)
     try:
@@ -534,7 +607,11 @@ def terminate_user(user_id: int, db: Session = Depends(get_db), organization: Or
     )
 
 
-@router.put("/{user_id}/plan", response_model=UserResponse)
+@router.put(
+    "/{user_id}/plan",
+    response_model=UserResponse,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_PLAN_CHANGE))],
+)
 def change_user_plan(user_id: int, payload: UserPlanChange, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> User:
     user = get_user_or_404(user_id, db, organization.id)
     plan = get_active_plan_or_400(payload.service_plan, db, organization.id)
@@ -562,7 +639,11 @@ def change_user_plan(user_id: int, payload: UserPlanChange, db: Session = Depend
     return user
 
 
-@router.delete("/{user_id}", response_model=UserDeleteResponse)
+@router.delete(
+    "/{user_id}",
+    response_model=UserDeleteResponse,
+    dependencies=[Depends(require_permission(Permission.SUBSCRIBERS_DELETE))],
+)
 def delete_user(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> UserDeleteResponse:
     user = get_user_or_404(user_id, db, organization.id)
     enforce_user_delete_policy(db, user)

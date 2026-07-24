@@ -3,6 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.authorization import Permission, require_permission
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
 from app.models import BillingAccount, User
@@ -29,12 +30,21 @@ def get_billing_account_or_404(user_id: int, db: Session, organization_id: int) 
     return account
 
 
-@router.get("/accounts", response_model=List[BillingAccountResponse])
+@router.get(
+    "/accounts",
+    response_model=List[BillingAccountResponse],
+    dependencies=[Depends(require_permission(Permission.BILLING_ACCOUNTS_READ))],
+)
 def list_billing_accounts(db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> list[BillingAccount]:
     return db.query(BillingAccount).filter(BillingAccount.organization_id == organization.id).order_by(BillingAccount.id.asc()).all()
 
 
-@router.post("/accounts", response_model=BillingAccountResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/accounts",
+    response_model=BillingAccountResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.BILLING_ACCOUNTS_CREATE))],
+)
 def create_billing_account(payload: BillingAccountCreate, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> BillingAccount:
     get_user_or_404(payload.user_id, db, organization.id)
 
@@ -53,12 +63,20 @@ def create_billing_account(payload: BillingAccountCreate, db: Session = Depends(
     return account
 
 
-@router.get("/users/{user_id}", response_model=BillingAccountResponse)
+@router.get(
+    "/users/{user_id}",
+    response_model=BillingAccountResponse,
+    dependencies=[Depends(require_permission(Permission.BILLING_ACCOUNTS_READ))],
+)
 def get_user_billing_account(user_id: int, db: Session = Depends(get_db), organization: OrganizationContext = Depends(get_organization_context)) -> BillingAccount:
     return get_billing_account_or_404(user_id, db, organization.id)
 
 
-@router.put("/users/{user_id}", response_model=BillingAccountResponse)
+@router.put(
+    "/users/{user_id}",
+    response_model=BillingAccountResponse,
+    dependencies=[Depends(require_permission(Permission.BILLING_ACCOUNTS_UPDATE))],
+)
 def update_user_billing_account(
     user_id: int,
     payload: BillingAccountUpdate,

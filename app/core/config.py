@@ -17,7 +17,10 @@ def required_environment(name: str) -> str:
 @dataclass(frozen=True)
 class Settings:
     database_url: str = required_environment("DATABASE_URL")
-    default_organization_slug: str = os.getenv("DEFAULT_ORGANIZATION_SLUG", "smart-fiber")
+    default_organization_slug: str = os.getenv(
+        "DEFAULT_ORGANIZATION_SLUG",
+        "smart-fiber",
+    )
     radclient_bin: str = os.getenv("RADIUS_RADCLIENT_BIN", "/usr/bin/radclient")
     coa_secret_path: str = os.getenv(
         "COA_SECRET_PATH",
@@ -34,7 +37,15 @@ class Settings:
     platform_admin_api_key: str | None = os.getenv("PLATFORM_ADMIN_API_KEY")
     internal_admin_email: str | None = os.getenv("INTERNAL_ADMIN_EMAIL")
     internal_admin_password: str | None = os.getenv("INTERNAL_ADMIN_PASSWORD")
-    upload_path: str = os.getenv("UPLOAD_PATH", "/var/lib/radiusfiber/uploads")
+    auth_token_issuer: str = os.getenv("AUTH_TOKEN_ISSUER", "radiusfiber")
+    auth_token_audience: str = os.getenv(
+        "AUTH_TOKEN_AUDIENCE",
+        "radiusfiber-api",
+    )
+    upload_path: str = os.getenv(
+        "UPLOAD_PATH",
+        "/var/lib/radiusfiber/uploads",
+    )
 
 
 settings = Settings()

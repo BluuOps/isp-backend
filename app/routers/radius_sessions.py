@@ -6,6 +6,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.authorization import Permission, require_permission
 from app.core.config import settings
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
@@ -31,7 +32,11 @@ REJECT_VALUE = "Reject"
 router = APIRouter(prefix="/radius", tags=["RADIUS Sessions"])
 
 
-@router.get("/sessions", response_model=List[RadiusSessionResponse])
+@router.get(
+    "/sessions",
+    response_model=List[RadiusSessionResponse],
+    dependencies=[Depends(require_permission(Permission.RADIUS_SESSIONS_READ))],
+)
 def list_active_sessions(
     db: Session = Depends(get_db),
     organization: OrganizationContext = Depends(get_organization_context),
@@ -68,6 +73,9 @@ def list_active_sessions(
     "/disconnect",
     response_model=RadiusDisconnectResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(require_permission(Permission.RADIUS_SESSIONS_DISCONNECT))
+    ],
 )
 def disconnect_session(
     payload: RadiusDisconnectRequest,
