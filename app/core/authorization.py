@@ -66,6 +66,14 @@ class Permission:
     PAYMENTS_UPDATE = "payments.update"
     PAYMENTS_VERIFY = "payments.verify"
     PAYMENTS_EXPORT = "payments.export"
+    NETWORK_NAS_READ = "network.nas.read"
+    NETWORK_NAS_CREATE = "network.nas.create"
+    NETWORK_NAS_UPDATE = "network.nas.update"
+    NETWORK_NAS_DELETE = "network.nas.delete"
+    NETWORK_ZONES_READ = "network.zones.read"
+    NETWORK_ZONES_CREATE = "network.zones.create"
+    NETWORK_ZONES_UPDATE = "network.zones.update"
+    NETWORK_ZONES_DELETE = "network.zones.delete"
 
 
 ALL_ORGANIZATION_PERMISSIONS = frozenset(
@@ -82,6 +90,8 @@ READ_ONLY_PERMISSIONS = frozenset(
         Permission.SUBSCRIBERS_READ,
         Permission.RADIUS_SESSIONS_READ,
         Permission.PLANS_READ,
+        Permission.NETWORK_NAS_READ,
+        Permission.NETWORK_ZONES_READ,
     }
 )
 
@@ -103,6 +113,12 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Permission.RADIUS_SESSIONS_READ,
             Permission.RADIUS_SESSIONS_DISCONNECT,
             Permission.PLANS_READ,
+            Permission.NETWORK_NAS_READ,
+            Permission.NETWORK_NAS_CREATE,
+            Permission.NETWORK_NAS_UPDATE,
+            Permission.NETWORK_ZONES_READ,
+            Permission.NETWORK_ZONES_CREATE,
+            Permission.NETWORK_ZONES_UPDATE,
         }
     ),
     "Billing": frozenset(
@@ -118,6 +134,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Permission.PAYMENTS_READ,
             Permission.PAYMENTS_CREATE,
             Permission.PAYMENTS_EXPORT,
+            Permission.NETWORK_NAS_READ,
+            Permission.NETWORK_ZONES_READ,
         }
     ),
     "Support": frozenset(
@@ -128,6 +146,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Permission.SUBSCRIBERS_READ,
             Permission.RADIUS_SESSIONS_READ,
             Permission.PLANS_READ,
+            Permission.NETWORK_NAS_READ,
+            Permission.NETWORK_ZONES_READ,
         }
     ),
     "Field Engineer": frozenset(
@@ -137,6 +157,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Permission.SUBSCRIBERS_READ,
             Permission.RADIUS_SESSIONS_READ,
             Permission.PLANS_READ,
+            Permission.NETWORK_NAS_READ,
+            Permission.NETWORK_ZONES_READ,
         }
     ),
     "Read Only": READ_ONLY_PERMISSIONS,

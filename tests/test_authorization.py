@@ -309,8 +309,43 @@ class PermissionTests(unittest.TestCase):
     def test_read_only_cannot_mutate(self):
         principal = organization_principal("Read Only")
         self.assertTrue(principal.has_permission(Permission.CUSTOMERS_READ))
+        self.assertTrue(principal.has_permission(Permission.NETWORK_NAS_READ))
+        self.assertTrue(principal.has_permission(Permission.NETWORK_ZONES_READ))
         self.assertFalse(principal.has_permission(Permission.CUSTOMERS_UPDATE))
         self.assertFalse(principal.has_permission(Permission.PAYMENTS_CREATE))
+        self.assertFalse(principal.has_permission(Permission.NETWORK_NAS_CREATE))
+        self.assertFalse(principal.has_permission(Permission.NETWORK_NAS_UPDATE))
+        self.assertFalse(principal.has_permission(Permission.NETWORK_NAS_DELETE))
+        self.assertFalse(principal.has_permission(Permission.NETWORK_ZONES_CREATE))
+        self.assertFalse(principal.has_permission(Permission.NETWORK_ZONES_UPDATE))
+        self.assertFalse(principal.has_permission(Permission.NETWORK_ZONES_DELETE))
+
+    def test_noc_can_manage_but_not_delete_network_inventory(self):
+        principal = organization_principal("NOC")
+        for permission in (
+            Permission.NETWORK_NAS_READ,
+            Permission.NETWORK_NAS_CREATE,
+            Permission.NETWORK_NAS_UPDATE,
+            Permission.NETWORK_ZONES_READ,
+            Permission.NETWORK_ZONES_CREATE,
+            Permission.NETWORK_ZONES_UPDATE,
+        ):
+            with self.subTest(permission=permission):
+                self.assertTrue(principal.has_permission(permission))
+        self.assertFalse(principal.has_permission(Permission.NETWORK_NAS_DELETE))
+        self.assertFalse(principal.has_permission(Permission.NETWORK_ZONES_DELETE))
+
+    def test_approved_staff_roles_can_read_network_inventory(self):
+        for role in ("NOC", "Billing", "Support", "Field Engineer", "Read Only"):
+            with self.subTest(role=role):
+                principal = organization_principal(role)
+                self.assertTrue(principal.has_permission(Permission.NETWORK_NAS_READ))
+                self.assertTrue(principal.has_permission(Permission.NETWORK_ZONES_READ))
+
+    def test_only_organization_admin_can_delete_network_inventory(self):
+        admin = organization_principal("Organization Admin")
+        self.assertTrue(admin.has_permission(Permission.NETWORK_NAS_DELETE))
+        self.assertTrue(admin.has_permission(Permission.NETWORK_ZONES_DELETE))
 
     def test_permission_dependency_allows_and_denies(self):
         dependency = require_permission(Permission.CUSTOMERS_UPDATE)
@@ -424,6 +459,17 @@ class RouteGuardRegressionTests(unittest.TestCase):
         ("GET", "/organization/subscription"): Permission.ORGANIZATION_SUBSCRIPTION_READ,
         ("GET", "/organization/feature-flags"): Permission.ORGANIZATION_FEATURE_FLAGS_READ,
         ("GET", "/organization/audit-logs"): Permission.ORGANIZATION_AUDIT_LOGS_READ,
+        ("GET", "/organization/zones"): Permission.NETWORK_ZONES_READ,
+        ("GET", "/organization/zones/{zone_id}"): Permission.NETWORK_ZONES_READ,
+        ("POST", "/organization/zones"): Permission.NETWORK_ZONES_CREATE,
+        ("PUT", "/organization/zones/{zone_id}"): Permission.NETWORK_ZONES_UPDATE,
+        ("DELETE", "/organization/zones/{zone_id}"): Permission.NETWORK_ZONES_DELETE,
+        ("GET", "/organization/nas"): Permission.NETWORK_NAS_READ,
+        ("GET", "/organization/nas/{nas_id}"): Permission.NETWORK_NAS_READ,
+        ("POST", "/organization/nas"): Permission.NETWORK_NAS_CREATE,
+        ("PUT", "/organization/nas/{nas_id}"): Permission.NETWORK_NAS_UPDATE,
+        ("PATCH", "/organization/nas/{nas_id}/status"): Permission.NETWORK_NAS_UPDATE,
+        ("DELETE", "/organization/nas/{nas_id}"): Permission.NETWORK_NAS_DELETE,
     }
 
     def test_every_critical_route_has_expected_permission(self):
