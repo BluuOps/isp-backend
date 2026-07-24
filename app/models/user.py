@@ -19,7 +19,7 @@ class User(Base):
         index=True,
     )
     service_plan = Column(String(100), nullable=False)
-    zone = Column(String(100), nullable=True)
-    status = Column(String(50), nullable=False, default="active")
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    zone = Column(String(100), nullable=False)
+    status = Column(String(50), nullable=True, default="active")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

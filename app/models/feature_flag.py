@@ -9,8 +9,8 @@ class FeatureFlag(Base):
     __table_args__ = (UniqueConstraint("organization_id", "key", name="uq_feature_flags_org_key"),)
 
     id = Column(Integer, primary_key=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
-    key = Column(String(100), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    key = Column(String(100), nullable=False)
     enabled = Column(Boolean, nullable=False, default=False)
     configuration = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

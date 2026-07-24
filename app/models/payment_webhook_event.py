@@ -1,4 +1,5 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -19,7 +20,7 @@ class PaymentWebhookEvent(Base):
         Index("ix_payment_webhook_payment_id", "payment_id"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     provider = Column(String(50), nullable=False)
     event_type = Column(String(100), nullable=False)
     provider_event_id = Column(String(255), nullable=True)
@@ -30,14 +31,14 @@ class PaymentWebhookEvent(Base):
     signature_valid = Column(Boolean, nullable=False, default=False)
     payload_hash = Column(String(64), nullable=False)
     deduplication_key = Column(String(255), nullable=False)
-    raw_payload = Column(JSON, nullable=False)
-    request_headers = Column(JSON, nullable=True)
-    processing_status = Column(String(30), nullable=False, default="received", index=True)
+    raw_payload = Column(JSONB, nullable=False)
+    request_headers = Column(JSONB, nullable=True)
+    processing_status = Column(String(30), nullable=False, default="received")
     processing_attempts = Column(Integer, nullable=False, default=0)
     next_retry_at = Column(DateTime(timezone=True), nullable=True)
     processing_started_at = Column(DateTime(timezone=True), nullable=True)
     processed_at = Column(DateTime(timezone=True), nullable=True)
     dead_lettered_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
