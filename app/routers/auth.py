@@ -29,6 +29,7 @@ from app.services.security import verify_password
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+platform_auth_router = APIRouter(prefix="/platform/auth", tags=["platform-auth"])
 
 TOKEN_TTL_SECONDS = 12 * 60 * 60
 
@@ -241,31 +242,70 @@ def _platform_auth_response(email: str, token: str) -> AuthResponse:
     )
 
 
+def _issue_platform_session(payload: LoginRequest) -> AuthResponse:
+    configured_email, configured_password, secret = _require_platform_auth_config()
+    if not secrets.compare_digest(payload.email.lower(), configured_email.lower()) or not secrets.compare_digest(
+        payload.password,
+        configured_password,
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    now = int(time.time())
+    token = _create_token(
+        {
+            "sub": "platform-admin",
+            "principal_type": "platform_admin",
+            "email": configured_email,
+            "role": "super_admin",
+            "roles": ["platform_admin"],
+            "permissions": PLATFORM_PERMISSIONS,
+            "iat": now,
+            "exp": now + TOKEN_TTL_SECONDS,
+        },
+        secret,
+    )
+    return _platform_auth_response(configured_email, token)
+
+
+def _platform_session_from_authorization(authorization: str | None) -> AuthResponse:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+    if not settings.jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is not configured",
+        )
+
+    token = authorization.split(" ", 1)[1].strip()
+    payload = _decode_token(token, settings.jwt_secret)
+    if payload.get("principal_type") != "platform_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform administrator access is required",
+        )
+    return _platform_auth_response(str(payload.get("email", settings.platform_admin_email)), token)
+
+
+@platform_auth_router.post("/login", response_model=AuthResponse)
+def platform_login(payload: LoginRequest) -> AuthResponse:
+    """Issue a Platform Administrator session without inferring tenant authority from Host."""
+    return _issue_platform_session(payload)
+
+
+@platform_auth_router.get("/me", response_model=AuthResponse)
+def platform_me(authorization: str | None = Header(default=None)) -> AuthResponse:
+    return _platform_session_from_authorization(authorization)
+
+
+@platform_auth_router.post("/logout")
+def platform_logout() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @router.post("/login", response_model=AuthResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> AuthResponse:
     if _platform_host(request):
-        configured_email, configured_password, secret = _require_platform_auth_config()
-        if not secrets.compare_digest(payload.email.lower(), configured_email.lower()) or not secrets.compare_digest(
-            payload.password,
-            configured_password,
-        ):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-
-        now = int(time.time())
-        token = _create_token(
-            {
-                "sub": "platform-admin",
-                "principal_type": "platform_admin",
-                "email": configured_email,
-                "role": "super_admin",
-                "roles": ["platform_admin"],
-                "permissions": PLATFORM_PERMISSIONS,
-                "iat": now,
-                "exp": now + TOKEN_TTL_SECONDS,
-            },
-            secret,
-        )
-        return _platform_auth_response(configured_email, token)
+        return _issue_platform_session(payload)
 
     tenant_context = resolve_tenant_from_request(request, db)
     organization = tenant_context.organization
@@ -340,7 +380,7 @@ def me(
     payload = _decode_token(token, settings.jwt_secret)
     token = authorization.split(" ", 1)[1]
     if payload.get("principal_type") == "platform_admin":
-        return _platform_auth_response(str(payload.get("email", settings.platform_admin_email)), token)
+        return _platform_session_from_authorization(authorization)
     principal = get_authenticated_principal(authorization, db)
     staff_id = int(principal.subject_id.split(":", 1)[1])
     staff = (
