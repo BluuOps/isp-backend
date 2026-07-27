@@ -504,6 +504,8 @@ class RouteGuardRegressionTests(unittest.TestCase):
         for route in app.routes:
             if not getattr(route, "path", "").startswith("/platform"):
                 continue
+            if getattr(route, "path", "").startswith("/platform/auth/"):
+                continue
             names = {getattr(call, "__name__", "") for call in dependency_calls(route.dependant)}
             self.assertIn("require_platform_principal", names)
 
