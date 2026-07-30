@@ -70,7 +70,7 @@ def readiness() -> dict[str, object]:
         "radclient": os.path.isfile(settings.radclient_bin)
         and os.access(settings.radclient_bin, os.X_OK),
         "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
-        "migration_status": migration_current == "0009_network_access_servers",
+        "migration_status": migration_current == "0010_customer_plan_payments",
     }
     ready = all(value for value in checks.values() if isinstance(value, bool))
     return {"status": "ready" if ready else "not_ready", "checks": checks}
