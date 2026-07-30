@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -9,8 +9,18 @@ class PaymentTransaction(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "transaction_reference", name="uq_payment_org_transaction_reference"),
         UniqueConstraint("organization_id", "idempotency_key", name="uq_payment_org_idempotency_key"),
+        UniqueConstraint("quote_reference", name="uq_payment_quote_reference"),
         Index("ix_payment_org_gateway_reference", "organization_id", "gateway", "gateway_reference"),
         Index("ix_payment_org_status", "organization_id", "payment_status"),
+        Index("ix_payment_transactions_selected_plan_id", "selected_plan_id"),
+        Index("ix_payment_transactions_fulfillment_status", "fulfillment_status"),
+        Index(
+            "uq_payment_gateway_reference",
+            "gateway",
+            "gateway_reference",
+            unique=True,
+            postgresql_where=text("gateway_reference IS NOT NULL"),
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -38,6 +48,12 @@ class PaymentTransaction(Base):
     gateway_metadata = Column(JSON, nullable=True)
     renewal_processed_at = Column(DateTime(timezone=True), nullable=True, index=True)
     renewal_cycles = Column(Integer, nullable=False, default=1)
+    selected_plan_id = Column(Integer, ForeignKey("service_plans.id", ondelete="SET NULL"), nullable=True)
+    billing_periods = Column(Integer, nullable=False, default=1)
+    quote_reference = Column(String(120), nullable=True)
+    fulfillment_status = Column(String(40), nullable=False, default="not_applicable")
+    previous_plan_name = Column(String(100), nullable=True)
+    resulting_plan_name = Column(String(100), nullable=True)
     expected_amount = Column(Numeric(12, 2), nullable=True)
     expected_currency = Column(String(3), nullable=True)
     old_expiration_date = Column(DateTime(timezone=True), nullable=True)

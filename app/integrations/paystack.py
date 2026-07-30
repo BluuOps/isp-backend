@@ -17,6 +17,23 @@ from app.integrations.base import (
 )
 
 
+def _safe_http_error_code(http_status: int, message: str) -> str:
+    normalized = message.lower()
+    if "email" in normalized:
+        category = "invalid_email"
+    elif "callback" in normalized or "url" in normalized:
+        category = "invalid_callback"
+    elif "amount" in normalized:
+        category = "invalid_amount"
+    elif "authorization" in normalized or "secret key" in normalized or "api key" in normalized:
+        category = "authentication_failed"
+    elif http_status >= 500:
+        category = "upstream_error"
+    else:
+        category = "request_rejected"
+    return f"gateway_http_{http_status}_{category}"
+
+
 class PaystackGateway:
     gateway_name = "paystack"
 
@@ -51,10 +68,14 @@ class PaystackGateway:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             try:
-                payload = json.loads(exc.read().decode("utf-8"))
+                error_payload = json.loads(exc.read().decode("utf-8"))
             except Exception:
-                payload = {"message": "Paystack HTTP error"}
-            raise PaymentGatewayError(str(payload.get("message") or "Paystack HTTP error"), code="gateway_http_error") from exc
+                error_payload = {"message": "Paystack HTTP error"}
+            provider_message = str(error_payload.get("message") or "Paystack HTTP error")
+            raise PaymentGatewayError(
+                "Paystack rejected the transaction request.",
+                code=_safe_http_error_code(exc.code, provider_message),
+            ) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise PaymentGatewayError("Unable to reach Paystack.", code="gateway_network_error") from exc
         except json.JSONDecodeError as exc:
@@ -81,11 +102,12 @@ class PaystackGateway:
             raise PaymentGatewayError(str(response.get("message") or "Paystack initialization failed."), code="gateway_initialize_failed")
         data = response.get("data") or {}
         authorization_url = data.get("authorization_url")
-        if not authorization_url:
-            raise PaymentGatewayError("Paystack did not return an authorization URL.", code="gateway_invalid_response")
+        access_code = data.get("access_code")
+        if not authorization_url or not access_code:
+            raise PaymentGatewayError("Paystack returned incomplete checkout data.", code="gateway_invalid_response")
         return GatewayInitializeResult(
             authorization_url=authorization_url,
-            access_code=data.get("access_code"),
+            access_code=access_code,
             gateway_reference=data.get("reference") or reference,
             raw_status=str(response.get("message") or ""),
             metadata={"paystack_data": {k: data.get(k) for k in ("reference", "access_code")}},
@@ -110,6 +132,7 @@ class PaystackGateway:
                 "channel": data.get("channel"),
                 "fees": data.get("fees"),
                 "gateway_response": data.get("gateway_response"),
+                "transaction_metadata": data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
             },
         )
 

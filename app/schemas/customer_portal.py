@@ -56,6 +56,10 @@ class CustomerPortalPaymentSummary(BaseModel):
     payment_status: str
     paid_at: Optional[datetime] = None
     created_at: datetime
+    selected_plan_id: Optional[int] = None
+    purchased_plan: Optional[str] = None
+    fulfillment_status: str = "not_applicable"
+    resulting_expiration_date: Optional[datetime] = None
 
 
 class CustomerPortalPaymentDetail(CustomerPortalPaymentSummary):

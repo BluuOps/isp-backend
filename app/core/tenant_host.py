@@ -75,13 +75,22 @@ def _resolve_organization(db: Session, tenant_label: str) -> Organization:
     if not TENANT_LABEL_RE.fullmatch(tenant_label):
         raise _tenant_error("malformed_tenant_subdomain", "Tenant subdomain is malformed.")
 
-    normalized = tenant_label.replace("-", "")
-    matches = (
-        db.query(Organization)
-        .filter(func.replace(func.lower(Organization.slug), "-", "") == normalized)
-        .limit(2)
-        .all()
-    )
+    alias_slug = _tenant_alias_slug(tenant_label)
+    if alias_slug:
+        matches = (
+            db.query(Organization)
+            .filter(func.lower(Organization.slug) == alias_slug)
+            .limit(2)
+            .all()
+        )
+    else:
+        normalized = tenant_label.replace("-", "")
+        matches = (
+            db.query(Organization)
+            .filter(func.replace(func.lower(Organization.slug), "-", "") == normalized)
+            .limit(2)
+            .all()
+        )
     if not matches:
         raise _tenant_error("tenant_not_found", "Organization was not found.", status.HTTP_404_NOT_FOUND)
     if len(matches) > 1:
@@ -91,6 +100,18 @@ def _resolve_organization(db: Session, tenant_label: str) -> Organization:
     if organization.status != "active":
         raise _tenant_error("tenant_inactive", "Organization is not active.", status.HTTP_403_FORBIDDEN)
     return organization
+
+
+def _tenant_alias_slug(tenant_label: str) -> str | None:
+    for entry in settings.tenant_host_aliases:
+        if "=" not in entry:
+            raise RuntimeError("TENANT_HOST_ALIASES contains a malformed entry")
+        alias, organization_slug = (part.strip().lower() for part in entry.split("=", 1))
+        if not TENANT_LABEL_RE.fullmatch(alias) or not TENANT_LABEL_RE.fullmatch(organization_slug):
+            raise RuntimeError("TENANT_HOST_ALIASES contains an invalid hostname alias or organization slug")
+        if alias == tenant_label:
+            return organization_slug
+    return None
 
 
 def resolve_tenant_from_request(
