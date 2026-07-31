@@ -66,6 +66,7 @@ class Permission:
     PAYMENTS_UPDATE = "payments.update"
     PAYMENTS_VERIFY = "payments.verify"
     PAYMENTS_EXPORT = "payments.export"
+    PAYMENTS_PLAN_ACTIVATE = "payments.plan.activate"
     NETWORK_NAS_READ = "network.nas.read"
     NETWORK_NAS_CREATE = "network.nas.create"
     NETWORK_NAS_UPDATE = "network.nas.update"
@@ -134,6 +135,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Permission.PAYMENTS_READ,
             Permission.PAYMENTS_CREATE,
             Permission.PAYMENTS_EXPORT,
+            Permission.PAYMENTS_PLAN_ACTIVATE,
             Permission.NETWORK_NAS_READ,
             Permission.NETWORK_ZONES_READ,
         }

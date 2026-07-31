@@ -45,6 +45,9 @@ class CustomerPortalServiceSummary(BaseModel):
     last_session_started_at: Optional[datetime] = None
     last_session_updated_at: Optional[datetime] = None
     framed_ip_address: Optional[str] = None
+    pending_plan_activation: bool = False
+    pending_activation_payment_id: Optional[int] = None
+    pending_activation_plan: Optional[str] = None
 
 
 class CustomerPortalPaymentSummary(BaseModel):

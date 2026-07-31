@@ -186,6 +186,21 @@ def _online(db: Session, username: str) -> bool:
     return db.query(RadAcct).filter(RadAcct.username == username, RadAcct.acctstoptime.is_(None)).first() is not None
 
 
+def _pending_plan_activation(db: Session, *, organization_id: int, customer_id: str, service_id: int):
+    return (
+        db.query(PaymentTransaction)
+        .filter(
+            PaymentTransaction.organization_id == organization_id,
+            PaymentTransaction.customer_id == customer_id,
+            PaymentTransaction.user_id == service_id,
+            PaymentTransaction.payment_status.in_(("successful", "paid")),
+            PaymentTransaction.activation_status.in_(("pending_activation", "blocked_duplicate")),
+        )
+        .order_by(PaymentTransaction.created_at.asc())
+        .first()
+    )
+
+
 def _service_response(db: Session, service: User, organization_id: int) -> CustomerPortalServiceSummary:
     plan = (
         db.query(ServicePlan)
@@ -193,6 +208,12 @@ def _service_response(db: Session, service: User, organization_id: int) -> Custo
         .first()
     )
     session = _latest_session(db, service.username)
+    pending_activation = _pending_plan_activation(
+        db,
+        organization_id=organization_id,
+        customer_id=service.customer_id,
+        service_id=service.id,
+    )
     return CustomerPortalServiceSummary(
         id=service.id,
         username=service.username,
@@ -205,6 +226,9 @@ def _service_response(db: Session, service: User, organization_id: int) -> Custo
         last_session_started_at=session.acctstarttime if session else None,
         last_session_updated_at=session.acctupdatetime if session else None,
         framed_ip_address=str(session.framedipaddress) if session and session.framedipaddress else None,
+        pending_plan_activation=pending_activation is not None,
+        pending_activation_payment_id=pending_activation.id if pending_activation else None,
+        pending_activation_plan=pending_activation.resulting_plan_name if pending_activation else None,
     )
 
 
@@ -576,6 +600,20 @@ def quote_payment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
     if service.status in {"terminated", "cancelled", "deleted"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service is not eligible for renewal")
+    pending_activation = _pending_plan_activation(
+        db,
+        organization_id=context.organization.id,
+        customer_id=context.customer.id,
+        service_id=service.id,
+    )
+    if pending_activation:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "pending_plan_activation",
+                "message": "A verified plan change for this service is awaiting staff activation",
+            },
+        )
     plan = (
         db.query(ServicePlan)
         .filter(

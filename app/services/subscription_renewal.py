@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models import PaymentTransaction, ServicePlan, User
 from app.services.audit import record_audit
+from app.services.plan_activation_identity import logical_plan_purchase_key
 
 
 RENEWABLE_STATUSES = {"active", "pending", "expired", "suspended"}
@@ -64,6 +65,19 @@ def process_subscription_renewal(
     payment.resulting_plan_name = payment.resulting_plan_name or purchased_plan_name
 
     if purchased_plan_name != service.service_plan:
+        periods = int(payment.billing_periods or payment.renewal_cycles or 1)
+        payment.purchased_duration_days = int(selected_plan.duration_days)
+        payment.activation_period_key = logical_plan_purchase_key(
+            organization_id=payment.organization_id,
+            customer_id=payment.customer_id,
+            service_id=service.id,
+            source_plan_name=service.service_plan,
+            selected_plan_id=selected_plan.id,
+            source_expiration=old_expiration,
+            billing_periods=periods,
+        )
+        payment.activation_status = "pending_activation"
+        payment.resolution_status = "unresolved"
         payment.old_expiration_date = old_expiration
         payment.new_expiration_date = old_expiration
         payment.renewal_processed_at = now

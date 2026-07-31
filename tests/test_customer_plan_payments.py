@@ -527,6 +527,7 @@ class PaymentSecurityPrimitiveTests(unittest.TestCase):
 
         with (
             patch("app.routers.customer_portal._customer_services", return_value=[service]),
+            patch("app.routers.customer_portal._pending_plan_activation", return_value=None),
             patch(
                 "app.routers.customer_portal.create_quote",
                 return_value=("signed-quote-not-a-provider-transaction", quote_record),
