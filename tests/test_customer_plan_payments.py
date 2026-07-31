@@ -14,8 +14,15 @@ from fastapi import HTTPException
 from app.integrations.base import GatewayVerifyResult, PaymentGatewayError
 from app.integrations.paystack import PaystackGateway
 from app.core.tenant_host import _tenant_alias_slug
-from app.schemas.payment import CustomerPaymentInitializeRequest
-from app.routers.customer_portal import _select_catalog_service
+from app.schemas.payment import CustomerPaymentInitializeRequest, CustomerPaymentQuoteRequest
+from app.routers.customer_portal import (
+    CATALOG_CUSTOMER_STATUSES,
+    PURCHASING_CUSTOMER_STATUSES,
+    _select_catalog_service,
+    get_customer_portal_context,
+    quote_payment,
+)
+from app.routers.customer_auth import _account_from_token
 from app.services import payment_quote
 from app.services.payment_service import (
     _callback_base_url_for_organization,
@@ -160,6 +167,34 @@ class RenewalIdempotencyTests(unittest.TestCase):
             process_subscription_renewal(SimpleNamespace(), payment=payment, service=service)
         self.assertEqual(service.expiration_date, provider_paid_at + timedelta(days=30))
         self.assertEqual(service.status, "active")
+
+    def test_suspended_service_extends_once_without_clearing_suspension(self):
+        provider_paid_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        original_expiration = provider_paid_at + timedelta(days=4)
+        service = SimpleNamespace(
+            id=27,
+            organization_id=20,
+            customer_id="M41_SF_ACCEPT_SUSPENDED",
+            status="suspended",
+            expiration_date=original_expiration,
+            service_plan="Smart Plus",
+        )
+        payment = self._payment(
+            organization_id=20,
+            customer_id="M41_SF_ACCEPT_SUSPENDED",
+            user_id=27,
+            paid_at=provider_paid_at,
+        )
+        with patch("app.services.subscription_renewal.record_audit"):
+            process_subscription_renewal(SimpleNamespace(), payment=payment, service=service)
+            first_expiration = service.expiration_date
+            process_subscription_renewal(SimpleNamespace(), payment=payment, service=service)
+
+        self.assertEqual(first_expiration, original_expiration + timedelta(days=30))
+        self.assertEqual(service.expiration_date, first_expiration)
+        self.assertEqual(service.status, "suspended")
+        self.assertEqual(payment.fulfillment_status, "completed")
+        self.assertIsNotNone(payment.renewal_processed_at)
 
     def test_plan_change_is_pending_without_service_mutation(self):
         service = SimpleNamespace(
@@ -331,6 +366,191 @@ class PaymentVerificationTests(unittest.TestCase):
 
 
 class PaymentSecurityPrimitiveTests(unittest.TestCase):
+    @staticmethod
+    def _context_db(*, account, organization, customer):
+        db = MagicMock()
+
+        def query(model):
+            row = {
+                "CustomerPortalAccount": account,
+                "Organization": organization,
+                "Customer": customer,
+            }[model.__name__]
+            result = MagicMock()
+            result.filter.return_value.first.return_value = row
+            return result
+
+        db.query.side_effect = query
+        return db
+
+    def test_active_portal_identity_allows_suspended_customer_context(self):
+        account = SimpleNamespace(
+            id=9,
+            organization_id=20,
+            customer_id="M41_SF_ACCEPT_SUSPENDED",
+            status="active",
+        )
+        organization = SimpleNamespace(id=20, status="active")
+        customer = SimpleNamespace(
+            id="M41_SF_ACCEPT_SUSPENDED",
+            organization_id=20,
+            account_status="suspended",
+        )
+        db = self._context_db(account=account, organization=organization, customer=customer)
+        claims = {
+            "sub": "9",
+            "principal_type": "customer",
+            "organization_id": 20,
+            "customer_id": "M41_SF_ACCEPT_SUSPENDED",
+        }
+
+        with (
+            patch("app.routers.customer_portal.bearer_payload", return_value=claims),
+            patch(
+                "app.routers.customer_portal.resolve_tenant_from_request",
+                return_value=SimpleNamespace(organization=organization),
+            ),
+        ):
+            context = get_customer_portal_context(
+                request=SimpleNamespace(),
+                authorization="Bearer redacted-test-token",
+                db=db,
+            )
+
+        self.assertIs(context.account, account)
+        self.assertIs(context.customer, customer)
+        self.assertEqual(context.customer.account_status, "suspended")
+
+    def test_customer_context_rejects_host_tenant_mismatch_without_disclosure(self):
+        account = SimpleNamespace(
+            id=9,
+            organization_id=20,
+            customer_id="M41_SF_ACCEPT_SUSPENDED",
+            status="active",
+        )
+        organization = SimpleNamespace(id=20, status="active")
+        customer = SimpleNamespace(
+            id="M41_SF_ACCEPT_SUSPENDED",
+            organization_id=20,
+            account_status="suspended",
+        )
+        db = self._context_db(account=account, organization=organization, customer=customer)
+        claims = {
+            "sub": "9",
+            "principal_type": "customer",
+            "organization_id": 20,
+            "customer_id": "M41_SF_ACCEPT_SUSPENDED",
+        }
+
+        with (
+            patch("app.routers.customer_portal.bearer_payload", return_value=claims),
+            patch(
+                "app.routers.customer_portal.resolve_tenant_from_request",
+                return_value=SimpleNamespace(organization=SimpleNamespace(id=21)),
+            ),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            get_customer_portal_context(
+                request=SimpleNamespace(),
+                authorization="Bearer redacted-test-token",
+                db=db,
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_disabled_portal_account_cannot_authenticate(self):
+        account = SimpleNamespace(
+            id=9,
+            organization_id=20,
+            customer_id="M41_SF_ACCEPT_SUSPENDED",
+            status="disabled",
+        )
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = account
+        claims = {
+            "sub": "9",
+            "principal_type": "customer",
+            "organization_id": 20,
+            "customer_id": "M41_SF_ACCEPT_SUSPENDED",
+        }
+
+        with (
+            patch("app.routers.customer_auth.bearer_payload", return_value=claims),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            _account_from_token(db, "Bearer redacted-test-token")
+
+        self.assertEqual(raised.exception.status_code, 401)
+
+    def test_expired_and_suspended_customers_can_view_and_purchase(self):
+        self.assertTrue({"active", "expired", "suspended"}.issubset(CATALOG_CUSTOMER_STATUSES))
+        self.assertTrue({"active", "expired", "suspended"}.issubset(PURCHASING_CUSTOMER_STATUSES))
+        self.assertTrue(
+            {"terminated", "deleted", "disabled"}.isdisjoint(PURCHASING_CUSTOMER_STATUSES)
+        )
+
+    def test_suspended_customer_can_quote_owned_service_without_network_action(self):
+        service = SimpleNamespace(
+            id=27,
+            organization_id=20,
+            customer_id="M41_SF_ACCEPT_SUSPENDED",
+            status="suspended",
+            service_plan="Smart Plus",
+            expiration_date=datetime.now(timezone.utc) + timedelta(days=4),
+        )
+        plan = SimpleNamespace(
+            id=33,
+            organization_id=20,
+            name="Smart Plus",
+            description="Synthetic plan",
+            rate_limit="20M/10M",
+            billing_interval="monthly",
+            duration_days=30,
+            currency="NGN",
+            price_minor=2_292_400,
+            status="active",
+            customer_visible=True,
+        )
+        context = SimpleNamespace(
+            organization=SimpleNamespace(id=20, status="active"),
+            customer=SimpleNamespace(
+                id="M41_SF_ACCEPT_SUSPENDED",
+                account_status="suspended",
+            ),
+        )
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = plan
+        quote_record = SimpleNamespace(
+            reference="M41-SUSPENDED-QUOTE",
+            expires_at=int(datetime.now(timezone.utc).timestamp()) + 300,
+        )
+
+        with (
+            patch("app.routers.customer_portal._customer_services", return_value=[service]),
+            patch(
+                "app.routers.customer_portal.create_quote",
+                return_value=("signed-quote-not-a-provider-transaction", quote_record),
+            ) as create_quote_mock,
+        ):
+            response = quote_payment(
+                CustomerPaymentQuoteRequest(service_id=27, plan_id=33, billing_periods=1),
+                db=db,
+                context=context,
+            )
+
+        self.assertEqual(response.service_id, 27)
+        self.assertEqual(response.plan.id, 33)
+        self.assertEqual(response.fulfillment_policy, "renewal")
+        create_quote_mock.assert_called_once_with(
+            organization_id=20,
+            customer_id="M41_SF_ACCEPT_SUSPENDED",
+            service_id=27,
+            plan_id=33,
+            billing_periods=1,
+            amount_minor=2_292_400,
+            currency="NGN",
+        )
+
     def test_catalog_requires_explicit_service_for_multi_service_customer(self):
         services = [
             SimpleNamespace(id=20, organization_id=10, customer_id="customer-a"),

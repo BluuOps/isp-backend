@@ -56,8 +56,8 @@ from app.services.payment_quote import create_quote, read_quote
 
 
 router = APIRouter(prefix="/customer-portal", tags=["Customer Portal"])
-CATALOG_CUSTOMER_STATUSES = {"active", "suspended"}
-PURCHASING_CUSTOMER_STATUSES = {"active"}
+CATALOG_CUSTOMER_STATUSES = {"active", "expired", "suspended"}
+PURCHASING_CUSTOMER_STATUSES = {"active", "expired", "suspended"}
 
 
 @dataclass(frozen=True)
