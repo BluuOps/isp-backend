@@ -179,6 +179,34 @@ def _payment_quote_consumed_error() -> HTTPException:
     )
 
 
+def _ensure_no_pending_plan_activation(
+    db: Session,
+    *,
+    organization_id: int,
+    customer_id: str,
+    service_id: int,
+) -> None:
+    pending_activation = (
+        db.query(PaymentTransaction)
+        .filter(
+            PaymentTransaction.organization_id == organization_id,
+            PaymentTransaction.customer_id == customer_id,
+            PaymentTransaction.user_id == service_id,
+            PaymentTransaction.payment_status == "successful",
+            PaymentTransaction.fulfillment_status == "pending_activation",
+        )
+        .first()
+    )
+    if pending_activation:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "pending_plan_activation",
+                "message": "A verified plan change for this service is awaiting activation",
+            },
+        )
+
+
 def _gateway_initialization_error(category: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -278,6 +306,12 @@ def initialize_customer_renewal(
     else:
         authoritative_minor = amount_to_kobo(parse_plan_price(plan) * Decimal(renewal_cycles))
         amount = (Decimal(authoritative_minor) / Decimal("100")).quantize(Decimal("0.01"))
+    _ensure_no_pending_plan_activation(
+        db,
+        organization_id=account.organization_id,
+        customer_id=customer.id,
+        service_id=service.id,
+    )
     reference = generate_reference(account.organization_id)
     now = _utc_now()
     abandon_stale_pending_payments(

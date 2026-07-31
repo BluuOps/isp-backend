@@ -7,7 +7,7 @@ from decimal import Decimal
 from io import BytesIO
 from types import SimpleNamespace
 from urllib.error import HTTPError
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
@@ -19,6 +19,7 @@ from app.routers.customer_portal import _select_catalog_service
 from app.services import payment_quote
 from app.services.payment_service import (
     _callback_base_url_for_organization,
+    _ensure_no_pending_plan_activation,
     _gateway_initialization_error,
     _payment_quote_consumed_error,
     _stored_idempotency_key,
@@ -416,6 +417,35 @@ class PaymentSecurityPrimitiveTests(unittest.TestCase):
         self.assertEqual(conflict.status_code, 409)
         self.assertEqual(conflict.detail["error"], "payment_quote_consumed")
         self.assertNotIn("customer", conflict.detail["message"].lower())
+
+    def test_pending_plan_activation_blocks_new_checkout_before_gateway(self):
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(id=17)
+
+        with self.assertRaises(HTTPException) as raised:
+            _ensure_no_pending_plan_activation(
+                db,
+                organization_id=20,
+                customer_id="customer-5",
+                service_id=29,
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.detail["error"], "pending_plan_activation")
+        self.assertNotIn("customer-5", str(raised.exception.detail))
+
+    def test_checkout_is_allowed_without_pending_plan_activation(self):
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = None
+
+        self.assertIsNone(
+            _ensure_no_pending_plan_activation(
+                db,
+                organization_id=20,
+                customer_id="customer-5",
+                service_id=29,
+            )
+        )
 
     def test_gateway_initialization_error_exposes_only_safe_category(self):
         error = _gateway_initialization_error("gateway_http_400_invalid_email")
