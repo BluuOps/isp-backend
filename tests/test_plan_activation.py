@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import threading
+import unittest
 
-import pytest
 from fastapi import HTTPException
 
 from app.core.authorization import Permission, require_permission, role_permissions
@@ -20,6 +20,7 @@ from app.services.plan_activation_identity import logical_plan_purchase_key
 
 
 NOW = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
+ASSERTIONS = unittest.TestCase()
 
 
 def payment(**overrides):
@@ -107,9 +108,9 @@ def test_activation_permission_is_restricted_to_approved_staff_roles():
     assert Permission.PAYMENTS_PLAN_ACTIVATE not in role_permissions("Read Only")
     assert Permission.PAYMENTS_PLAN_ACTIVATE not in role_permissions("Support")
     read_only = SimpleNamespace(has_permission=lambda _permission: False)
-    with pytest.raises(HTTPException) as exc:
+    with ASSERTIONS.assertRaises(HTTPException) as exc:
         require_permission(Permission.PAYMENTS_PLAN_ACTIVATE)(read_only)
-    assert exc.value.status_code == 403
+    assert exc.exception.status_code == 403
 
 
 def test_duplicate_resolution_requires_explicit_canonical_selection_and_does_not_activate():
@@ -253,16 +254,16 @@ def test_exact_replay_returns_existing_result_but_conflicting_replay_is_409():
         patch("app.services.plan_activation.record_audit"),
     ):
         assert activate_plan_change(db, PRINCIPAL, payment_id=23, correlation_id="same-correlation").payment_id == 23
-    with pytest.raises(HTTPException) as exc, patch("app.services.plan_activation.record_audit"):
+    with ASSERTIONS.assertRaises(HTTPException) as exc, patch("app.services.plan_activation.record_audit"):
         activate_plan_change(db, PRINCIPAL, payment_id=23, correlation_id="different-correlation")
-    assert exc.value.status_code == 409
+    assert exc.exception.status_code == 409
 
 
 def test_cross_tenant_payment_is_hidden_as_404():
     db = FakeSession(None, None, None)
-    with pytest.raises(HTTPException) as exc:
+    with ASSERTIONS.assertRaises(HTTPException) as exc:
         activate_plan_change(db, PRINCIPAL, payment_id=999, correlation_id="cross-tenant-request")
-    assert exc.value.status_code == 404
+    assert exc.exception.status_code == 404
 
 
 class LockedQuery(QueryResult):
@@ -335,3 +336,11 @@ def test_two_concurrent_exact_requests_change_service_once():
     assert selected_service.service_plan == "Smart Flex"
     assert selected_service.expiration_date == NOW + timedelta(days=30)
     assert evidence.activation_status == "activated"
+
+
+def load_tests(_loader, _tests, _pattern):
+    suite = unittest.TestSuite()
+    for name, test in sorted(globals().items()):
+        if name.startswith("test_") and callable(test):
+            suite.addTest(unittest.FunctionTestCase(test))
+    return suite
