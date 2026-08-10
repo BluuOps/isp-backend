@@ -4,12 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.principal import bearer_payload
+from app.core.tenant_host import resolve_tenant_from_request
 from app.database import get_db
 from app.models import (
     AuditLog,
@@ -40,17 +41,23 @@ from app.schemas.customer_portal import (
 from app.schemas.payment import (
     CustomerPaymentInitializeRequest,
     CustomerPaymentInitializeResponse,
+    CustomerPaymentQuoteRequest,
+    CustomerPaymentQuoteResponse,
     CustomerPaymentStatusResponse,
     CustomerPaymentVerifyRequest,
     CustomerPaymentVerifyResponse,
+    CustomerServicePlanResponse,
 )
 from app.services.audit import record_audit
 from app.integrations.base import GatewayVerifyResult, PaymentGatewayError
 from app.integrations.paystack import PaystackGateway
 from app.services.payment_service import initialize_customer_renewal, process_verified_payment
+from app.services.payment_quote import create_quote, read_quote
 
 
 router = APIRouter(prefix="/customer-portal", tags=["Customer Portal"])
+CATALOG_CUSTOMER_STATUSES = {"active", "expired", "suspended"}
+PURCHASING_CUSTOMER_STATUSES = {"active", "expired", "suspended"}
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,7 @@ def _record_customer_audit(
 
 
 def get_customer_portal_context(
+    request: Request,
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> CustomerPortalContext:
@@ -128,6 +136,9 @@ def get_customer_portal_context(
     )
     if not organization or not customer:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid customer token")
+    tenant_context = resolve_tenant_from_request(request, db)
+    if tenant_context.organization.id != organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer portal not found")
     return CustomerPortalContext(account=account, customer=customer, organization=organization)
 
 
@@ -148,6 +159,20 @@ def _mask_username(username: str) -> str:
     return f"{username[:2]}***{username[-2:]}"
 
 
+def _select_catalog_service(services: list[User], service_id: int | None) -> User | None:
+    if service_id is not None:
+        selected_service = next((service for service in services if service.id == service_id), None)
+        if not selected_service:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+        return selected_service
+    if len(services) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Select the linked service before viewing service plans",
+        )
+    return services[0] if services else None
+
+
 def _latest_session(db: Session, username: str) -> RadAcct | None:
     return (
         db.query(RadAcct)
@@ -161,6 +186,21 @@ def _online(db: Session, username: str) -> bool:
     return db.query(RadAcct).filter(RadAcct.username == username, RadAcct.acctstoptime.is_(None)).first() is not None
 
 
+def _pending_plan_activation(db: Session, *, organization_id: int, customer_id: str, service_id: int):
+    return (
+        db.query(PaymentTransaction)
+        .filter(
+            PaymentTransaction.organization_id == organization_id,
+            PaymentTransaction.customer_id == customer_id,
+            PaymentTransaction.user_id == service_id,
+            PaymentTransaction.payment_status.in_(("successful", "paid")),
+            PaymentTransaction.activation_status.in_(("pending_activation", "blocked_duplicate")),
+        )
+        .order_by(PaymentTransaction.created_at.asc())
+        .first()
+    )
+
+
 def _service_response(db: Session, service: User, organization_id: int) -> CustomerPortalServiceSummary:
     plan = (
         db.query(ServicePlan)
@@ -168,6 +208,12 @@ def _service_response(db: Session, service: User, organization_id: int) -> Custo
         .first()
     )
     session = _latest_session(db, service.username)
+    pending_activation = _pending_plan_activation(
+        db,
+        organization_id=organization_id,
+        customer_id=service.customer_id,
+        service_id=service.id,
+    )
     return CustomerPortalServiceSummary(
         id=service.id,
         username=service.username,
@@ -180,6 +226,9 @@ def _service_response(db: Session, service: User, organization_id: int) -> Custo
         last_session_started_at=session.acctstarttime if session else None,
         last_session_updated_at=session.acctupdatetime if session else None,
         framed_ip_address=str(session.framedipaddress) if session and session.framedipaddress else None,
+        pending_plan_activation=pending_activation is not None,
+        pending_activation_payment_id=pending_activation.id if pending_activation else None,
+        pending_activation_plan=pending_activation.resulting_plan_name if pending_activation else None,
     )
 
 
@@ -193,6 +242,10 @@ def _payment_summary(payment: PaymentTransaction) -> CustomerPortalPaymentSummar
         payment_status=payment.payment_status,
         paid_at=payment.paid_at,
         created_at=payment.created_at,
+        selected_plan_id=payment.selected_plan_id,
+        purchased_plan=payment.resulting_plan_name,
+        fulfillment_status=payment.fulfillment_status,
+        resulting_expiration_date=payment.new_expiration_date,
     )
 
 
@@ -261,6 +314,21 @@ def _customer_services(db: Session, context: CustomerPortalContext) -> list[User
         .filter(User.organization_id == context.organization.id, User.customer_id == context.customer.id)
         .order_by(User.id.asc())
         .all()
+    )
+
+
+def _customer_plan_response(plan: ServicePlan, current_plan: str | None) -> CustomerServicePlanResponse:
+    return CustomerServicePlanResponse(
+        id=plan.id,
+        name=plan.name,
+        description=plan.description,
+        rate_limit=plan.rate_limit,
+        billing_interval=plan.billing_interval,
+        duration_days=plan.duration_days,
+        currency=plan.currency,
+        price_minor=int(plan.price_minor),
+        eligible=True,
+        is_current=plan.name == current_plan,
     )
 
 
@@ -474,16 +542,133 @@ def list_payments(
     return [_payment_summary(row) for row in rows]
 
 
+@router.get("/service-plans", response_model=list[CustomerServicePlanResponse])
+def list_customer_service_plans(
+    service_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> list[CustomerServicePlanResponse]:
+    if (
+        context.organization.status != "active"
+        or context.customer.account_status not in CATALOG_CUSTOMER_STATUSES
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Customer plan catalogue is unavailable")
+    services = _customer_services(db, context)
+    selected_service = _select_catalog_service(services, service_id)
+    if not selected_service:
+        return []
+    current_plan = selected_service.service_plan if selected_service else None
+    plans = (
+        db.query(ServicePlan)
+        .filter(
+            ServicePlan.organization_id == context.organization.id,
+            ServicePlan.status == "active",
+            ServicePlan.customer_visible.is_(True),
+            ServicePlan.price_minor.isnot(None),
+            ServicePlan.price_minor > 0,
+        )
+        .order_by(ServicePlan.name.asc())
+        .all()
+    )
+    return [_customer_plan_response(plan, current_plan) for plan in plans]
+
+
+@router.post("/payments/quote", response_model=CustomerPaymentQuoteResponse)
+def quote_payment(
+    payload: CustomerPaymentQuoteRequest,
+    db: Session = Depends(get_db),
+    context: CustomerPortalContext = Depends(get_customer_portal_context),
+) -> CustomerPaymentQuoteResponse:
+    if (
+        context.organization.status != "active"
+        or context.customer.account_status not in PURCHASING_CUSTOMER_STATUSES
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Customer purchasing is unavailable")
+    services = _customer_services(db, context)
+    if payload.service_id is None:
+        if not services:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No linked service is available")
+        if len(services) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Select the linked service to renew",
+            )
+        service = services[0]
+    else:
+        service = next((item for item in services if item.id == payload.service_id), None)
+    if not service:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+    if service.status in {"terminated", "cancelled", "deleted"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service is not eligible for renewal")
+    pending_activation = _pending_plan_activation(
+        db,
+        organization_id=context.organization.id,
+        customer_id=context.customer.id,
+        service_id=service.id,
+    )
+    if pending_activation:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "pending_plan_activation",
+                "message": "A verified plan change for this service is awaiting staff activation",
+            },
+        )
+    plan = (
+        db.query(ServicePlan)
+        .filter(
+            ServicePlan.id == payload.plan_id,
+            ServicePlan.organization_id == context.organization.id,
+            ServicePlan.status == "active",
+            ServicePlan.customer_visible.is_(True),
+            ServicePlan.price_minor.isnot(None),
+            ServicePlan.price_minor > 0,
+        )
+        .first()
+    )
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service plan not found")
+    amount_minor = int(plan.price_minor) * payload.billing_periods
+    token, quote = create_quote(
+        organization_id=context.organization.id,
+        customer_id=context.customer.id,
+        service_id=service.id,
+        plan_id=plan.id,
+        billing_periods=payload.billing_periods,
+        amount_minor=amount_minor,
+        currency=plan.currency,
+    )
+    return CustomerPaymentQuoteResponse(
+        quote_token=token,
+        quote_reference=quote.reference,
+        expires_at=datetime.fromtimestamp(quote.expires_at, tz=timezone.utc),
+        service_id=service.id,
+        plan=_customer_plan_response(plan, service.service_plan),
+        billing_periods=payload.billing_periods,
+        amount_minor=amount_minor,
+        amount=Decimal(amount_minor) / Decimal("100"),
+        currency=plan.currency,
+        current_expiration_date=service.expiration_date,
+        fulfillment_policy="renewal" if plan.name == service.service_plan else "pending_activation",
+    )
+
+
 @router.post("/payments/initialize", response_model=CustomerPaymentInitializeResponse)
 def initialize_payment(
     payload: CustomerPaymentInitializeRequest,
     db: Session = Depends(get_db),
     context: CustomerPortalContext = Depends(get_customer_portal_context),
 ) -> CustomerPaymentInitializeResponse:
+    if (
+        context.organization.status != "active"
+        or context.customer.account_status not in PURCHASING_CUSTOMER_STATUSES
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Customer purchasing is unavailable")
+    quote = read_quote(payload.quote_token)
     service = (
         db.query(User)
         .filter(
-            User.id == payload.service_id,
+            User.id == quote.service_id,
             User.organization_id == context.organization.id,
             User.customer_id == context.customer.id,
         )
@@ -491,6 +676,27 @@ def initialize_payment(
     )
     if not service:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+    if service.status in {"terminated", "cancelled", "deleted"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service is not eligible for renewal")
+
+    if quote.organization_id != context.organization.id or quote.customer_id != context.customer.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment quote not found")
+    selected_plan = (
+        db.query(ServicePlan)
+        .filter(
+            ServicePlan.id == quote.plan_id,
+            ServicePlan.organization_id == context.organization.id,
+            ServicePlan.status == "active",
+            ServicePlan.customer_visible.is_(True),
+            ServicePlan.price_minor.isnot(None),
+            ServicePlan.price_minor > 0,
+        )
+        .first()
+    )
+    if not selected_plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service plan not found")
+    if selected_plan.currency != quote.currency:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Payment quote currency is stale")
 
     try:
         payment = initialize_customer_renewal(
@@ -498,8 +704,11 @@ def initialize_payment(
             account=context.account,
             customer=context.customer,
             service=service,
-            renewal_cycles=payload.renewal_cycles,
+            renewal_cycles=quote.billing_periods,
             idempotency_key=payload.idempotency_key,
+            selected_plan=selected_plan,
+            quote_reference=quote.reference,
+            quoted_amount_minor=quote.amount_minor,
         )
         db.commit()
     except Exception:

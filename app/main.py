@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import settings
 from app.core.errors import ApiError, api_error_handler, integrity_error_handler
 from app.database import engine
-from app.routers import auth, billing, customer_auth, customer_portal, customers, network, organization, payments, plans, platform, radius_sessions, release, users, webhooks
+from app.routers import auth, billing, customer_auth, customer_portal, customers, network, organization, payments, plan_activations, plans, platform, radius_sessions, release, users, webhooks
 
 
 app = FastAPI(
@@ -26,6 +26,7 @@ app.include_router(plans.router)
 app.include_router(billing.router)
 app.include_router(customers.router)
 app.include_router(payments.router)
+app.include_router(plan_activations.router)
 app.include_router(radius_sessions.router)
 app.include_router(platform.router)
 app.include_router(organization.router)
@@ -70,7 +71,7 @@ def readiness() -> dict[str, object]:
         "radclient": os.path.isfile(settings.radclient_bin)
         and os.access(settings.radclient_bin, os.X_OK),
         "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
-        "migration_status": migration_current == "0009_network_access_servers",
+        "migration_status": migration_current == "0011_plan_change_activation",
     }
     ready = all(value for value in checks.values() if isinstance(value, bool))
     return {"status": "ready" if ready else "not_ready", "checks": checks}

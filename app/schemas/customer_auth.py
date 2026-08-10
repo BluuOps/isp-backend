@@ -34,6 +34,8 @@ class CustomerTenantResponse(BaseModel):
     currency: str
     timezone: str
     resolution_source: str
+    environment_label: str | None = None
+    payment_disclosure: str | None = None
 
 
 class CustomerPasswordChangeRequest(BaseModel):

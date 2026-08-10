@@ -121,8 +121,7 @@ class PaymentSummary(BaseModel):
 
 
 class CustomerPaymentInitializeRequest(BaseModel):
-    service_id: int = Field(..., ge=1)
-    renewal_cycles: int = Field(default=1, ge=1, le=12)
+    quote_token: str = Field(..., min_length=32, max_length=4096)
     idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=120)
 
 
@@ -135,6 +134,39 @@ class CustomerPaymentInitializeResponse(BaseModel):
     currency: str
     status: str
     renewal_cycles: int
+
+
+class CustomerServicePlanResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    rate_limit: str
+    billing_interval: str
+    duration_days: int
+    currency: str
+    price_minor: int
+    eligible: bool
+    is_current: bool
+
+
+class CustomerPaymentQuoteRequest(BaseModel):
+    plan_id: int = Field(..., ge=1)
+    service_id: Optional[int] = Field(default=None, ge=1)
+    billing_periods: int = Field(default=1, ge=1, le=12)
+
+
+class CustomerPaymentQuoteResponse(BaseModel):
+    quote_token: str
+    quote_reference: str
+    expires_at: datetime
+    service_id: int
+    plan: CustomerServicePlanResponse
+    billing_periods: int
+    amount_minor: int
+    amount: Decimal
+    currency: str
+    current_expiration_date: Optional[datetime] = None
+    fulfillment_policy: str
 
 
 class CustomerPaymentStatusResponse(BaseModel):

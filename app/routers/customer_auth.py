@@ -166,6 +166,7 @@ def me(authorization: str | None = Header(default=None), db: Session = Depends(g
 def tenant(request: Request, db: Session = Depends(get_db)) -> CustomerTenantResponse:
     context = resolve_tenant_from_request(request, db)
     organization = context.organization
+    synthetic_staging = organization.slug.endswith("-staging-acceptance")
     return CustomerTenantResponse(
         id=organization.id,
         name=organization.name,
@@ -174,6 +175,12 @@ def tenant(request: Request, db: Session = Depends(get_db)) -> CustomerTenantRes
         currency=organization.currency,
         timezone=organization.timezone,
         resolution_source=context.source,
+        environment_label="Synthetic staging" if synthetic_staging else None,
+        payment_disclosure=(
+            "Paystack test mode only. No real payment or network activation will occur."
+            if synthetic_staging
+            else None
+        ),
     )
 
 

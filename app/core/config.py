@@ -55,6 +55,11 @@ class Settings:
         for item in os.getenv("TENANT_RESERVED_SUBDOMAINS", "app,api,www,admin,platform").split(",")
         if item.strip()
     )
+    tenant_host_aliases: tuple[str, ...] = tuple(
+        item.strip()
+        for item in os.getenv("TENANT_HOST_ALIASES", "").split(",")
+        if item.strip()
+    )
     allow_staging_tenant_fallback: bool = os.getenv("ALLOW_STAGING_TENANT_FALLBACK", "false").lower() in {
         "1",
         "true",
@@ -84,6 +89,11 @@ class Settings:
     paystack_public_key: str | None = os.getenv("PAYSTACK_PUBLIC_KEY")
     paystack_base_url: str = os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co").rstrip("/")
     paystack_callback_base_url: str | None = os.getenv("PAYSTACK_CALLBACK_BASE_URL")
+    paystack_callback_base_urls: tuple[str, ...] = tuple(
+        item.strip()
+        for item in os.getenv("PAYSTACK_CALLBACK_BASE_URLS", "").split(",")
+        if item.strip()
+    )
     paystack_webhook_route_token: str | None = os.getenv("PAYSTACK_WEBHOOK_ROUTE_TOKEN")
     payment_gateway: str = os.getenv("PAYMENT_GATEWAY", "manual").lower()
     payment_currency: str = os.getenv("PAYMENT_CURRENCY", "NGN").upper()
