@@ -53,6 +53,7 @@ def readiness() -> dict[str, object]:
         "payment_transactions", "customer_portal_accounts",
         "support_tickets", "ticket_messages", "payment_webhook_events",
         "network_access_servers",
+        "expiry_scan_runs", "expiry_disconnect_jobs",
     }
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
@@ -66,12 +67,18 @@ def readiness() -> dict[str, object]:
     checks = {
         "database": True,
         "tables": not bool(required_tables - tables),
-        "coa_secret": os.path.isfile(settings.coa_secret_path)
-        and os.access(settings.coa_secret_path, os.R_OK),
-        "radclient": os.path.isfile(settings.radclient_bin)
-        and os.access(settings.radclient_bin, os.X_OK),
+        "coa_secret": settings.radius_disconnect_mode != "real" or (
+            settings.radius_coa_enabled
+            and os.path.isfile(settings.coa_secret_path)
+            and os.access(settings.coa_secret_path, os.R_OK)
+        ),
+        "radclient": settings.radius_disconnect_mode != "real" or (
+            settings.radius_coa_enabled
+            and os.path.isfile(settings.radclient_bin)
+            and os.access(settings.radclient_bin, os.X_OK)
+        ),
         "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
-        "migration_status": migration_current == "0011_plan_change_activation",
+        "migration_status": migration_current == "0012_expiry_enforcement",
     }
     ready = all(value for value in checks.values() if isinstance(value, bool))
     return {"status": "ready" if ready else "not_ready", "checks": checks}

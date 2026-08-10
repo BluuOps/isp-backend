@@ -98,6 +98,11 @@ def disconnect_session(
     db: Session = Depends(get_db),
     organization: OrganizationContext = Depends(get_organization_context),
 ) -> RadiusDisconnectResponse:
+    if not settings.radius_coa_enabled or settings.radius_disconnect_mode != "real":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RADIUS disconnect execution is disabled",
+        )
     account = db.query(User).filter(
         User.username == payload.username,
         User.organization_id == organization.id,

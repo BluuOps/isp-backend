@@ -30,14 +30,11 @@ from app.schemas import (
     UserUpdate,
 )
 from app.services.audit import record_audit
+from app.services.radius_authorization import synchronize_radius_authorization
 
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
-MIKROTIK_RATE_LIMIT_ATTRIBUTE = "Mikrotik-Rate-Limit"
-PASSWORD_ATTRIBUTE = "Cleartext-Password"
-REJECT_ATTRIBUTE = "Auth-Type"
-REJECT_VALUE = "Reject"
 STATUS_ACTIVE = "active"
 STATUS_SUSPENDED = "suspended"
 STATUS_PENDING = "pending"
@@ -117,36 +114,6 @@ def add_calendar_months(value: datetime, months: int) -> datetime:
     return value.replace(year=year, month=month, day=day)
 
 
-def upsert_radcheck(db: Session, username: str, attribute: str, value: str, op: str = ":=") -> RadCheck:
-    row = db.query(RadCheck).filter(RadCheck.username == username, RadCheck.attribute == attribute).first()
-    if row:
-        row.op = op
-        row.value = value
-        return row
-
-    row = RadCheck(username=username, attribute=attribute, op=op, value=value)
-    db.add(row)
-    return row
-
-
-def upsert_radreply(db: Session, username: str, attribute: str, value: str, op: str = ":=") -> RadReply:
-    row = db.query(RadReply).filter(RadReply.username == username, RadReply.attribute == attribute).first()
-    if row:
-        row.op = op
-        row.value = value
-        return row
-
-    row = RadReply(username=username, attribute=attribute, op=op, value=value)
-    db.add(row)
-    return row
-
-
-def remove_radcheck_attribute(db: Session, username: str, attribute: str) -> None:
-    rows = db.query(RadCheck).filter(RadCheck.username == username, RadCheck.attribute == attribute).all()
-    for row in rows:
-        db.delete(row)
-
-
 def sync_radius_username(db: Session, old_username: str, new_username: str) -> None:
     if old_username == new_username:
         return
@@ -158,20 +125,7 @@ def sync_radius_username(db: Session, old_username: str, new_username: str) -> N
 
 
 def provision_active_radius(db: Session, user: User, plan: ServicePlan) -> None:
-    remove_radcheck_attribute(db, user.username, REJECT_ATTRIBUTE)
-    upsert_radcheck(db, user.username, PASSWORD_ATTRIBUTE, user.password)
-    upsert_radreply(db, user.username, MIKROTIK_RATE_LIMIT_ATTRIBUTE, plan.rate_limit)
-
-
-def block_radius_authentication(db: Session, username: str) -> None:
-    upsert_radcheck(db, username, REJECT_ATTRIBUTE, REJECT_VALUE)
-
-
-def delete_radius_provisioning(db: Session, username: str) -> None:
-    for row in db.query(RadCheck).filter(RadCheck.username == username).all():
-        db.delete(row)
-    for row in db.query(RadReply).filter(RadReply.username == username).all():
-        db.delete(row)
+    synchronize_radius_authorization(db, user, plan)
 
 
 def enforce_user_delete_policy(db: Session, user: User) -> None:
@@ -203,34 +157,14 @@ def apply_radius_lifecycle(
     user: User,
     plan: ServicePlan | None = None,
 ) -> None:
-    if user.status == STATUS_ACTIVE:
-        if plan is None:
-            plan = get_active_plan_or_400(user.service_plan, db, user.organization_id)
-        provision_active_radius(db, user, plan)
-
-        expiration_date = user.expiration_date
-        if expiration_date and expiration_date.tzinfo is None:
-            expiration_date = expiration_date.replace(tzinfo=timezone.utc)
-        if expiration_date and expiration_date <= datetime.now(timezone.utc):
-            block_radius_authentication(db, user.username)
-        return
-
-    if user.status == STATUS_SUSPENDED:
-        if plan is None:
-            plan = get_active_plan_or_400(user.service_plan, db, user.organization_id)
-        provision_active_radius(db, user, plan)
-        block_radius_authentication(db, user.username)
-        return
-
-    if user.status in {STATUS_PENDING, STATUS_TERMINATED}:
-        delete_radius_provisioning(db, user.username)
-        block_radius_authentication(db, user.username)
-        return
-
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Invalid subscriber lifecycle status",
-    )
+    if user.status not in {STATUS_ACTIVE, STATUS_SUSPENDED, STATUS_PENDING, STATUS_TERMINATED}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid subscriber lifecycle status",
+        )
+    if plan is None and user.status in {STATUS_ACTIVE, STATUS_SUSPENDED}:
+        plan = get_active_plan_or_400(user.service_plan, db, user.organization_id)
+    synchronize_radius_authorization(db, user, plan)
 
 
 @router.get(

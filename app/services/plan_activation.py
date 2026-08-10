@@ -10,6 +10,8 @@ from app.core.authorization import AuthenticatedPrincipal
 from app.models import PaymentTransaction, ServicePlan, User
 from app.schemas.plan_activation import PlanActivationSummary
 from app.services.audit import record_audit
+from app.services.expiry_reconciliation import cancel_stale_disconnect_jobs
+from app.services.radius_authorization import synchronize_radius_authorization
 
 
 BLOCKED_SERVICE_STATUSES = {"disabled", "deleted", "terminated", "cancelled"}
@@ -293,6 +295,16 @@ def activate_plan_change(
     old_expiration = service.expiration_date
     service.service_plan = plan.name
     service.expiration_date = new_expiration
+    cancel_stale_disconnect_jobs(
+        db,
+        service,
+        now=now,
+        correlation_id=correlation_id,
+        actor_type="organization_staff",
+        actor_id=str(_staff_id(principal)),
+        actor_label=principal.actor_label,
+    )
+    synchronize_radius_authorization(db, service, plan, now=now)
     payment.activation_status = "activated"
     payment.fulfillment_status = "completed"
     payment.activated_at = now

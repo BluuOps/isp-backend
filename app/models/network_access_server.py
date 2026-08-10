@@ -13,6 +13,11 @@ class NetworkAccessServer(Base):
             "nas_ip_address",
             name="uq_network_access_servers_org_ip",
         ),
+        UniqueConstraint(
+            "id",
+            "organization_id",
+            name="uq_network_access_servers_id_organization",
+        ),
     )
 
     id = Column(Integer, primary_key=True)

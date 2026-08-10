@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, text
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -6,6 +6,16 @@ from app.database import Base
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_users_id_organization"),
+        Index(
+            "ix_users_expiry_scan",
+            "organization_id",
+            "expiration_date",
+            "id",
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)

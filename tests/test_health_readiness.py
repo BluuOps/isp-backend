@@ -29,6 +29,8 @@ REQUIRED_TABLES = {
     "ticket_messages",
     "payment_webhook_events",
     "network_access_servers",
+    "expiry_scan_runs",
+    "expiry_disconnect_jobs",
     "alembic_version",
 }
 
@@ -118,8 +120,8 @@ class HealthReadinessTests(unittest.IsolatedAsyncioTestCase):
         )
         return status, json.loads(body)
 
-    async def test_current_0011_revision_is_ready(self):
-        status, body = await self._request("0011_plan_change_activation")
+    async def test_current_0012_revision_is_ready(self):
+        status, body = await self._request("0012_expiry_enforcement")
 
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ready")

@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.models import PaymentTransaction, ServicePlan, User
 from app.services.audit import record_audit
+from app.services.expiry_reconciliation import cancel_stale_disconnect_jobs
 from app.services.plan_activation_identity import logical_plan_purchase_key
+from app.services.radius_authorization import synchronize_radius_authorization
 
 
 RENEWABLE_STATUSES = {"active", "pending", "expired", "suspended"}
@@ -120,6 +122,22 @@ def process_subscription_renewal(
     service.expiration_date = new_expiration
     if service.status in {"expired", "pending"}:
         service.status = "active"
+
+    cancel_stale_disconnect_jobs(
+        db,
+        service,
+        now=now,
+        correlation_id=payment.transaction_reference,
+        actor_type=payment.created_by_principal_type or "customer",
+        actor_id=str(payment.created_by_customer_id or payment.customer_id),
+        actor_label=payment.created_by or payment.customer_id,
+    )
+    authorization_plan = selected_plan or db.query(ServicePlan).filter(
+        ServicePlan.name == service.service_plan,
+        ServicePlan.organization_id == service.organization_id,
+        ServicePlan.status == "active",
+    ).first()
+    synchronize_radius_authorization(db, service, authorization_plan, now=now)
 
     record_audit(
         db,

@@ -143,8 +143,15 @@ class RenewalIdempotencyTests(unittest.TestCase):
             service_plan="Tenant Plan",
         )
         payment = self._payment()
-        db = SimpleNamespace()
-        with patch("app.services.subscription_renewal.record_audit"):
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+            id=30, organization_id=10, name="Tenant Plan", status="active"
+        )
+        with (
+            patch("app.services.subscription_renewal.record_audit"),
+            patch("app.services.subscription_renewal.cancel_stale_disconnect_jobs"),
+            patch("app.services.subscription_renewal.synchronize_radius_authorization"),
+        ):
             process_subscription_renewal(db, payment=payment, service=service)
             first_expiration = service.expiration_date
             process_subscription_renewal(db, payment=payment, service=service)
@@ -163,8 +170,16 @@ class RenewalIdempotencyTests(unittest.TestCase):
             service_plan="Tenant Plan",
         )
         payment = self._payment(paid_at=provider_paid_at)
-        with patch("app.services.subscription_renewal.record_audit"):
-            process_subscription_renewal(SimpleNamespace(), payment=payment, service=service)
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+            id=30, organization_id=10, name="Tenant Plan", status="active"
+        )
+        with (
+            patch("app.services.subscription_renewal.record_audit"),
+            patch("app.services.subscription_renewal.cancel_stale_disconnect_jobs"),
+            patch("app.services.subscription_renewal.synchronize_radius_authorization"),
+        ):
+            process_subscription_renewal(db, payment=payment, service=service)
         self.assertEqual(service.expiration_date, provider_paid_at + timedelta(days=30))
         self.assertEqual(service.status, "active")
 
@@ -185,10 +200,18 @@ class RenewalIdempotencyTests(unittest.TestCase):
             user_id=27,
             paid_at=provider_paid_at,
         )
-        with patch("app.services.subscription_renewal.record_audit"):
-            process_subscription_renewal(SimpleNamespace(), payment=payment, service=service)
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+            id=31, organization_id=20, name="Smart Plus", status="active"
+        )
+        with (
+            patch("app.services.subscription_renewal.record_audit"),
+            patch("app.services.subscription_renewal.cancel_stale_disconnect_jobs"),
+            patch("app.services.subscription_renewal.synchronize_radius_authorization"),
+        ):
+            process_subscription_renewal(db, payment=payment, service=service)
             first_expiration = service.expiration_date
-            process_subscription_renewal(SimpleNamespace(), payment=payment, service=service)
+            process_subscription_renewal(db, payment=payment, service=service)
 
         self.assertEqual(first_expiration, original_expiration + timedelta(days=30))
         self.assertEqual(service.expiration_date, first_expiration)
@@ -345,6 +368,8 @@ class PaymentVerificationTests(unittest.TestCase):
         with (
             patch("app.services.payment_service.record_audit"),
             patch("app.services.subscription_renewal.record_audit"),
+            patch("app.services.subscription_renewal.cancel_stale_disconnect_jobs"),
+            patch("app.services.subscription_renewal.synchronize_radius_authorization"),
         ):
             process_verified_payment(
                 Database(),
