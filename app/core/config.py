@@ -25,6 +25,34 @@ class Settings:
     )
     coa_nas_ip: str = os.getenv("RADIUS_COA_NAS_IP", "192.168.222.1")
     coa_port: str = os.getenv("RADIUS_COA_PORT", "3799")
+    radius_coa_enabled: bool = os.getenv("RADIUS_COA_ENABLED", "false").lower() in {
+        "1", "true", "yes", "on",
+    }
+    radius_disconnect_mode: str = os.getenv("RADIUS_DISCONNECT_MODE", "disabled").lower()
+    radius_disconnect_timeout_seconds: int = max(
+        1, min(30, int(os.getenv("RADIUS_DISCONNECT_TIMEOUT_SECONDS", "12")))
+    )
+    radius_disconnect_nas_allowlist: tuple[str, ...] = tuple(
+        item.strip()
+        for item in os.getenv("RADIUS_DISCONNECT_NAS_ALLOWLIST", "").split(",")
+        if item.strip()
+    )
+    expiry_worker_enabled: bool = os.getenv("EXPIRY_WORKER_ENABLED", "false").lower() in {
+        "1", "true", "yes", "on",
+    }
+    expiry_worker_dry_run: bool = os.getenv("EXPIRY_WORKER_DRY_RUN", "true").lower() in {
+        "1", "true", "yes", "on",
+    }
+    expiry_scan_batch_size: int = max(1, min(1000, int(os.getenv("EXPIRY_SCAN_BATCH_SIZE", "100"))))
+    expiry_disconnect_max_attempts: int = max(
+        1, min(10, int(os.getenv("EXPIRY_DISCONNECT_MAX_ATTEMPTS", "3")))
+    )
+    expiry_disconnect_backoff_seconds: int = max(
+        5, min(3600, int(os.getenv("EXPIRY_DISCONNECT_BACKOFF_SECONDS", "30")))
+    )
+    expiry_disconnect_processing_timeout_seconds: int = max(
+        30, min(3600, int(os.getenv("EXPIRY_DISCONNECT_PROCESSING_TIMEOUT_SECONDS", "120")))
+    )
     pilot_calledstationid: str = os.getenv(
         "PILOT_CALLEDSTATIONID",
         os.getenv("RADIUS_PILOT_CALLED_STATION_ID", "core-radius-pilot"),

@@ -221,6 +221,8 @@ def test_activation_updates_only_selected_service_and_preserves_suspension():
         patch("app.services.plan_activation._competitors", return_value=[evidence]),
         patch("app.services.plan_activation._summary", return_value=SimpleNamespace(payment_id=23)) as summary,
         patch("app.services.plan_activation.record_audit") as audit,
+        patch("app.services.plan_activation.cancel_stale_disconnect_jobs"),
+        patch("app.services.plan_activation.synchronize_radius_authorization"),
     ):
         result = activate_plan_change(db, PRINCIPAL, payment_id=23, correlation_id="activation-correlation-23")
 
@@ -252,6 +254,8 @@ def test_exact_replay_returns_existing_result_but_conflicting_replay_is_409():
     with (
         patch("app.services.plan_activation._summary", return_value=SimpleNamespace(payment_id=23)),
         patch("app.services.plan_activation.record_audit"),
+        patch("app.services.plan_activation.cancel_stale_disconnect_jobs"),
+        patch("app.services.plan_activation.synchronize_radius_authorization"),
     ):
         assert activate_plan_change(db, PRINCIPAL, payment_id=23, correlation_id="same-correlation").payment_id == 23
     with ASSERTIONS.assertRaises(HTTPException) as exc, patch("app.services.plan_activation.record_audit"):
@@ -324,6 +328,8 @@ def test_two_concurrent_exact_requests_change_service_once():
         patch("app.services.plan_activation._competitors", return_value=[evidence]),
         patch("app.services.plan_activation._summary", return_value=SimpleNamespace(payment_id=23)),
         patch("app.services.plan_activation.record_audit"),
+        patch("app.services.plan_activation.cancel_stale_disconnect_jobs"),
+        patch("app.services.plan_activation.synchronize_radius_authorization"),
     ):
         threads = [threading.Thread(target=run, args=(session,)) for session in sessions]
         for thread in threads:

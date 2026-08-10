@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app import app
 from app.database import Base
-from app.models import CustomerPortalAccount, NetworkAccessServer, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
+from app.models import CustomerPortalAccount, ExpiryDisconnectJob, ExpiryScanRun, NetworkAccessServer, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
 from app.schemas import (
     CustomerAuthLoginRequest,
     CustomerAuthResponse,
@@ -160,6 +160,8 @@ def main() -> None:
         "zones",
         "users",
         "network_access_servers",
+        "expiry_scan_runs",
+        "expiry_disconnect_jobs",
     }
     metadata_tables = set(Base.metadata.tables)
     missing_tables = expected_tables.difference(metadata_tables)
@@ -178,6 +180,8 @@ def main() -> None:
         PaymentTransaction.__name__,
         PaymentWebhookEvent.__name__,
         NetworkAccessServer.__name__,
+        ExpiryScanRun.__name__,
+        ExpiryDisconnectJob.__name__,
         CustomerPortalAccount.__name__,
         SupportTicket.__name__,
         TicketMessage.__name__,

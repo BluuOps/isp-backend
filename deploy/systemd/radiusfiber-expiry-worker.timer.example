@@ -1,0 +1,13 @@
+[Unit]
+Description=Run RadiusFiber subscription expiry enforcement every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+RandomizedDelaySec=3s
+Unit=radiusfiber-expiry-worker.service
+
+[Install]
+WantedBy=timers.target
