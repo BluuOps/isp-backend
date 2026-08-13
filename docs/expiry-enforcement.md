@@ -70,6 +70,12 @@ password or secret fields. Retry a job by an approved tenant-scoped operational 
 changes the existing job back to `retryable_failure`; never insert a duplicate. Cancel a stale job
 by setting `cancelled` only after verifying a renewal or replacement session.
 
+An accounting row is considered online only when it has no Stop timestamp and its most recent
+Interim-Update (or Start before the first Interim-Update) falls within
+`RADIUS_SESSION_FRESHNESS_SECONDS`. The default is 900 seconds. Keep this value longer than the
+NAS Interim-Update interval, and validate it before changing the default; old rows without a Stop
+packet must not create online totals or disconnect jobs.
+
 Disable active-session enforcement with `EXPIRY_WORKER_ENABLED=false`; authentication state and
 normal API operation remain available. A failed disconnect does not mean authentication succeeded:
 check the `Auth-Type`/`Expiration` controls separately from job status. For an offline NAS, retain

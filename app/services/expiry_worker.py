@@ -32,6 +32,7 @@ from app.services.disconnect_adapter import (
 )
 from app.services.expiry_policy import AccessReason, aware_utc, require_aware_utc
 from app.services.radius_authorization import synchronize_radius_authorization
+from app.services.radius_session_freshness import fresh_active_session_conditions
 
 
 logger = logging.getLogger("radiusfiber.expiry_worker")
@@ -154,7 +155,10 @@ def scan_expired_services(
             newly_expired += 1
             active_session = (
                 db.query(RadAcct)
-                .filter(RadAcct.username == service.username, RadAcct.acctstoptime.is_(None))
+                .filter(
+                    RadAcct.username == service.username,
+                    *fresh_active_session_conditions(current),
+                )
                 .order_by(RadAcct.acctstarttime.desc(), RadAcct.radacctid.desc())
                 .first()
             )
@@ -381,7 +385,7 @@ def process_next_disconnect_job(
         session = db.query(RadAcct).filter(
             RadAcct.radacctid == job.session_radacct_id,
             RadAcct.username == (service.username if service else ""),
-            RadAcct.acctstoptime.is_(None),
+            *fresh_active_session_conditions(current),
         ).first()
         requested_expiration = aware_utc(job.requested_expiration_at)
         current_expiration = aware_utc(service.expiration_date) if service else None

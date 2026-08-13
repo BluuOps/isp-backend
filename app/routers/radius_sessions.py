@@ -17,6 +17,7 @@ from app.schemas.radius_session import (
     RadiusSessionResponse,
 )
 from app.services.audit import record_audit
+from app.services.radius_session_freshness import fresh_active_session_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def list_active_sessions(
         db.query(RadAcct)
         .join(User, User.username == RadAcct.username)
         .filter(
-            RadAcct.acctstoptime.is_(None),
+            *fresh_active_session_conditions(),
             User.organization_id == organization.id,
         )
         .order_by(RadAcct.acctstarttime.desc())
@@ -141,7 +142,7 @@ def disconnect_session(
         db.query(RadAcct)
         .filter(
             RadAcct.username == payload.username,
-            RadAcct.acctstoptime.is_(None),
+            *fresh_active_session_conditions(),
             RadAcct.calledstationid == PILOT_CALLED_STATION_ID,
         )
         .order_by(RadAcct.acctstarttime.desc())
