@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
+from sqlalchemy import DateTime, Interval, bindparam, func
 
 from app.core.config import settings
 from app.models import RadAcct
@@ -22,7 +22,19 @@ def session_freshness_cutoff(now: datetime | None = None) -> datetime:
 def fresh_active_session_conditions(now: datetime | None = None):
     """Canonical predicates for an open session with recent accounting activity."""
 
-    cutoff = session_freshness_cutoff(now)
+    if now is None:
+        freshness_interval = bindparam(
+            "radius_session_freshness_interval",
+            timedelta(seconds=settings.radius_session_freshness_seconds),
+            type_=Interval(),
+        )
+        cutoff = func.current_timestamp() - freshness_interval
+    else:
+        cutoff = bindparam(
+            "radius_session_freshness_cutoff",
+            session_freshness_cutoff(now),
+            type_=DateTime(timezone=True),
+        )
     return (
         RadAcct.acctstoptime.is_(None),
         func.coalesce(RadAcct.acctupdatetime, RadAcct.acctstarttime) >= cutoff,

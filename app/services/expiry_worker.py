@@ -81,6 +81,41 @@ def _try_worker_lock(db: Session) -> bool:
     )
 
 
+def _latest_fresh_session(
+    db: Session,
+    username: str,
+    *,
+    test_now: datetime | None = None,
+) -> RadAcct | None:
+    return (
+        db.query(RadAcct)
+        .filter(
+            RadAcct.username == username,
+            *fresh_active_session_conditions(test_now),
+        )
+        .order_by(RadAcct.acctstarttime.desc(), RadAcct.radacctid.desc())
+        .first()
+    )
+
+
+def _fresh_job_session(
+    db: Session,
+    *,
+    radacct_id: int,
+    username: str,
+    test_now: datetime | None = None,
+) -> RadAcct | None:
+    return (
+        db.query(RadAcct)
+        .filter(
+            RadAcct.radacctid == radacct_id,
+            RadAcct.username == username,
+            *fresh_active_session_conditions(test_now),
+        )
+        .first()
+    )
+
+
 def scan_expired_services(
     db: Session,
     *,
@@ -153,15 +188,7 @@ def scan_expired_services(
             if decision.reason != AccessReason.EXPIRED:
                 continue
             newly_expired += 1
-            active_session = (
-                db.query(RadAcct)
-                .filter(
-                    RadAcct.username == service.username,
-                    *fresh_active_session_conditions(current),
-                )
-                .order_by(RadAcct.acctstarttime.desc(), RadAcct.radacctid.desc())
-                .first()
-            )
+            active_session = _latest_fresh_session(db, service.username, test_now=now)
             if not active_session:
                 if not is_dry_run:
                     record_audit(
@@ -382,11 +409,12 @@ def process_next_disconnect_job(
             User.organization_id == job.organization_id,
             User.customer_id == job.customer_id,
         ).first()
-        session = db.query(RadAcct).filter(
-            RadAcct.radacctid == job.session_radacct_id,
-            RadAcct.username == (service.username if service else ""),
-            *fresh_active_session_conditions(current),
-        ).first()
+        session = _fresh_job_session(
+            db,
+            radacct_id=job.session_radacct_id,
+            username=service.username if service else "",
+            test_now=now,
+        )
         requested_expiration = aware_utc(job.requested_expiration_at)
         current_expiration = aware_utc(service.expiration_date) if service else None
         if (

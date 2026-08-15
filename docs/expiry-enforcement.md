@@ -76,6 +76,16 @@ Interim-Update (or Start before the first Interim-Update) falls within
 NAS Interim-Update interval, and validate it before changing the default; old rows without a Stop
 packet must not create online totals or disconnect jobs.
 
+Production freshness SQL uses PostgreSQL `CURRENT_TIMESTAMP`; deterministic tests explicitly inject
+an aware reference time. Customer Portal object-denial events are emitted as bounded JSON through
+the `radiusfiber.security` application logger. The systemd service pipeline sends stderr/stdout to
+journald. Durable retention and alerting for these events must be configured and verified before
+the journal retention window is treated as long-term security evidence.
+
+`PERF-RADACCT-001`: benchmark the fresh-session predicate with representative `radacct` volume and
+query plans, then evaluate a PostgreSQL partial expression index for open rows covering
+`COALESCE(acctupdatetime, acctstarttime)`. Do not add the index without measured justification.
+
 Disable active-session enforcement with `EXPIRY_WORKER_ENABLED=false`; authentication state and
 normal API operation remain available. A failed disconnect does not mean authentication succeeded:
 check the `Auth-Type`/`Expiration` controls separately from job status. For an offline NAS, retain

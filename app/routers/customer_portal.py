@@ -54,6 +54,7 @@ from app.integrations.paystack import PaystackGateway
 from app.services.payment_service import initialize_customer_renewal, process_verified_payment
 from app.services.payment_quote import create_quote, read_quote
 from app.services.radius_session_freshness import fresh_active_session_conditions
+from app.services.security_events import emit_customer_object_denial
 
 
 router = APIRouter(prefix="/customer-portal", tags=["Customer Portal"])
@@ -730,6 +731,7 @@ def initialize_payment(
 @router.get("/payments/{payment_id}", response_model=CustomerPortalPaymentDetail)
 def get_payment(
     payment_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     context: CustomerPortalContext = Depends(get_customer_portal_context),
 ) -> CustomerPortalPaymentDetail:
@@ -743,6 +745,15 @@ def get_payment(
         .first()
     )
     if not payment:
+        emit_customer_object_denial(
+            request,
+            event_name="customer.payment.view_denied",
+            customer_id=context.customer.id,
+            organization_id=context.organization.id,
+            resource_type="payment",
+            resource_id=payment_id,
+            route_template="/customer-portal/payments/{payment_id}",
+        )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
     return CustomerPortalPaymentDetail(
         **_payment_summary(payment).model_dump(),
@@ -935,6 +946,7 @@ def create_ticket(
 @router.get("/tickets/{ticket_id}", response_model=CustomerPortalTicketResponse)
 def get_ticket(
     ticket_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     context: CustomerPortalContext = Depends(get_customer_portal_context),
 ) -> CustomerPortalTicketResponse:
@@ -948,5 +960,14 @@ def get_ticket(
         .first()
     )
     if not ticket:
+        emit_customer_object_denial(
+            request,
+            event_name="customer.ticket.view_denied",
+            customer_id=context.customer.id,
+            organization_id=context.organization.id,
+            resource_type="support_ticket",
+            resource_id=ticket_id,
+            route_template="/customer-portal/tickets/{ticket_id}",
+        )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
     return _ticket_response(db, ticket, include_messages=True)
