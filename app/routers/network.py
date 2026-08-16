@@ -17,6 +17,7 @@ from app.schemas.network import (
     ZoneUpdate,
 )
 from app.services.audit import record_audit
+from app.services.radius_session_freshness import fresh_active_session_conditions
 
 
 router = APIRouter(
@@ -82,7 +83,7 @@ def _active_session_count(db: Session, organization_id: int, nas_ip_address: obj
         .join(User, User.username == RadAcct.username)
         .filter(
             RadAcct.nasipaddress == nas_ip_address,
-            RadAcct.acctstoptime.is_(None),
+            *fresh_active_session_conditions(),
             User.organization_id == organization_id,
         )
         .count()

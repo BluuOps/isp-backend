@@ -70,6 +70,22 @@ password or secret fields. Retry a job by an approved tenant-scoped operational 
 changes the existing job back to `retryable_failure`; never insert a duplicate. Cancel a stale job
 by setting `cancelled` only after verifying a renewal or replacement session.
 
+An accounting row is considered online only when it has no Stop timestamp and its most recent
+Interim-Update (or Start before the first Interim-Update) falls within
+`RADIUS_SESSION_FRESHNESS_SECONDS`. The default is 900 seconds. Keep this value longer than the
+NAS Interim-Update interval, and validate it before changing the default; old rows without a Stop
+packet must not create online totals or disconnect jobs.
+
+Production freshness SQL uses PostgreSQL `CURRENT_TIMESTAMP`; deterministic tests explicitly inject
+an aware reference time. Customer Portal object-denial events are emitted as bounded JSON through
+the `radiusfiber.security` application logger. The systemd service pipeline sends stderr/stdout to
+journald. Durable retention and alerting for these events must be configured and verified before
+the journal retention window is treated as long-term security evidence.
+
+`PERF-RADACCT-001`: benchmark the fresh-session predicate with representative `radacct` volume and
+query plans, then evaluate a PostgreSQL partial expression index for open rows covering
+`COALESCE(acctupdatetime, acctstarttime)`. Do not add the index without measured justification.
+
 Disable active-session enforcement with `EXPIRY_WORKER_ENABLED=false`; authentication state and
 normal API operation remain available. A failed disconnect does not mean authentication succeeded:
 check the `Auth-Type`/`Expiration` controls separately from job status. For an offline NAS, retain

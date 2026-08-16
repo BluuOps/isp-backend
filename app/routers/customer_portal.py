@@ -53,6 +53,8 @@ from app.integrations.base import GatewayVerifyResult, PaymentGatewayError
 from app.integrations.paystack import PaystackGateway
 from app.services.payment_service import initialize_customer_renewal, process_verified_payment
 from app.services.payment_quote import create_quote, read_quote
+from app.services.radius_session_freshness import fresh_active_session_conditions
+from app.services.security_events import emit_customer_object_denial
 
 
 router = APIRouter(prefix="/customer-portal", tags=["Customer Portal"])
@@ -183,7 +185,12 @@ def _latest_session(db: Session, username: str) -> RadAcct | None:
 
 
 def _online(db: Session, username: str) -> bool:
-    return db.query(RadAcct).filter(RadAcct.username == username, RadAcct.acctstoptime.is_(None)).first() is not None
+    return (
+        db.query(RadAcct)
+        .filter(RadAcct.username == username, *fresh_active_session_conditions())
+        .first()
+        is not None
+    )
 
 
 def _pending_plan_activation(db: Session, *, organization_id: int, customer_id: str, service_id: int):
@@ -371,8 +378,6 @@ def dashboard(
     if not recent_tickets:
         empty_states["tickets"] = "No support tickets are open."
 
-    _record_customer_audit(db, context, action="customer.portal.dashboard_viewed", target_type="customer", target_id=context.customer.id)
-    db.commit()
     return CustomerPortalDashboard(
         customer_id=context.customer.id,
         customer_name=context.customer.name,
@@ -477,8 +482,6 @@ def get_service(
     )
     if not service:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
-    _record_customer_audit(db, context, action="customer.service.viewed", target_type="user", target_id=str(service.id))
-    db.commit()
     return _service_response(db, service, context.organization.id)
 
 
@@ -502,8 +505,6 @@ def get_subscription(
             .filter(BillingAccount.organization_id == context.organization.id, BillingAccount.user_id == latest_service.id)
             .first()
         )
-    _record_customer_audit(db, context, action="customer.subscription.viewed", target_type="customer", target_id=context.customer.id)
-    db.commit()
     return CustomerPortalSubscription(
         current_plan=latest_service.service_plan if latest_service else None,
         service_status=latest_service.status if latest_service else None,
@@ -730,6 +731,7 @@ def initialize_payment(
 @router.get("/payments/{payment_id}", response_model=CustomerPortalPaymentDetail)
 def get_payment(
     payment_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     context: CustomerPortalContext = Depends(get_customer_portal_context),
 ) -> CustomerPortalPaymentDetail:
@@ -743,11 +745,16 @@ def get_payment(
         .first()
     )
     if not payment:
-        _record_customer_audit(db, context, action="customer.payment.view_denied", target_type="payment", target_id=str(payment_id), success=False)
-        db.commit()
+        emit_customer_object_denial(
+            request,
+            event_name="customer.payment.view_denied",
+            customer_id=context.customer.id,
+            organization_id=context.organization.id,
+            resource_type="payment",
+            resource_id=payment_id,
+            route_template="/customer-portal/payments/{payment_id}",
+        )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
-    _record_customer_audit(db, context, action="customer.payment.viewed", target_type="payment", target_id=str(payment.id))
-    db.commit()
     return CustomerPortalPaymentDetail(
         **_payment_summary(payment).model_dump(),
         external_reference=payment.external_reference,
@@ -939,6 +946,7 @@ def create_ticket(
 @router.get("/tickets/{ticket_id}", response_model=CustomerPortalTicketResponse)
 def get_ticket(
     ticket_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     context: CustomerPortalContext = Depends(get_customer_portal_context),
 ) -> CustomerPortalTicketResponse:
@@ -952,9 +960,14 @@ def get_ticket(
         .first()
     )
     if not ticket:
-        _record_customer_audit(db, context, action="customer.ticket.view_denied", target_type="support_ticket", target_id=str(ticket_id), success=False)
-        db.commit()
+        emit_customer_object_denial(
+            request,
+            event_name="customer.ticket.view_denied",
+            customer_id=context.customer.id,
+            organization_id=context.organization.id,
+            resource_type="support_ticket",
+            resource_id=ticket_id,
+            route_template="/customer-portal/tickets/{ticket_id}",
+        )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
-    _record_customer_audit(db, context, action="customer.ticket.viewed", target_type="support_ticket", target_id=str(ticket.id))
-    db.commit()
     return _ticket_response(db, ticket, include_messages=True)

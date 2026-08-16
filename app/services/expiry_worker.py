@@ -32,6 +32,7 @@ from app.services.disconnect_adapter import (
 )
 from app.services.expiry_policy import AccessReason, aware_utc, require_aware_utc
 from app.services.radius_authorization import synchronize_radius_authorization
+from app.services.radius_session_freshness import fresh_active_session_conditions
 
 
 logger = logging.getLogger("radiusfiber.expiry_worker")
@@ -77,6 +78,41 @@ def _try_worker_lock(db: Session) -> bool:
             text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
             {"lock_id": ADVISORY_LOCK_ID},
         ).scalar()
+    )
+
+
+def _latest_fresh_session(
+    db: Session,
+    username: str,
+    *,
+    test_now: datetime | None = None,
+) -> RadAcct | None:
+    return (
+        db.query(RadAcct)
+        .filter(
+            RadAcct.username == username,
+            *fresh_active_session_conditions(test_now),
+        )
+        .order_by(RadAcct.acctstarttime.desc(), RadAcct.radacctid.desc())
+        .first()
+    )
+
+
+def _fresh_job_session(
+    db: Session,
+    *,
+    radacct_id: int,
+    username: str,
+    test_now: datetime | None = None,
+) -> RadAcct | None:
+    return (
+        db.query(RadAcct)
+        .filter(
+            RadAcct.radacctid == radacct_id,
+            RadAcct.username == username,
+            *fresh_active_session_conditions(test_now),
+        )
+        .first()
     )
 
 
@@ -152,12 +188,7 @@ def scan_expired_services(
             if decision.reason != AccessReason.EXPIRED:
                 continue
             newly_expired += 1
-            active_session = (
-                db.query(RadAcct)
-                .filter(RadAcct.username == service.username, RadAcct.acctstoptime.is_(None))
-                .order_by(RadAcct.acctstarttime.desc(), RadAcct.radacctid.desc())
-                .first()
-            )
+            active_session = _latest_fresh_session(db, service.username, test_now=now)
             if not active_session:
                 if not is_dry_run:
                     record_audit(
@@ -378,11 +409,12 @@ def process_next_disconnect_job(
             User.organization_id == job.organization_id,
             User.customer_id == job.customer_id,
         ).first()
-        session = db.query(RadAcct).filter(
-            RadAcct.radacctid == job.session_radacct_id,
-            RadAcct.username == (service.username if service else ""),
-            RadAcct.acctstoptime.is_(None),
-        ).first()
+        session = _fresh_job_session(
+            db,
+            radacct_id=job.session_radacct_id,
+            username=service.username if service else "",
+            test_now=now,
+        )
         requested_expiration = aware_utc(job.requested_expiration_at)
         current_expiration = aware_utc(service.expiration_date) if service else None
         if (

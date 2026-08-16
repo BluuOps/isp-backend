@@ -19,6 +19,7 @@ from app.schemas.management import (
 )
 from app.services.audit import record_audit
 from app.services.onboarding import onboard_organization
+from app.services.radius_session_freshness import fresh_active_session_conditions
 
 router = APIRouter(
     prefix="/platform",
@@ -45,7 +46,7 @@ def dashboard(db: Session = Depends(get_db)) -> dict[str, int]:
         "subscriptions": db.query(Subscription).count(),
         "customers": db.query(Customer).count(),
         "pppoe_accounts": db.query(User).count(),
-        "online_sessions": db.query(RadAcct).filter(RadAcct.acctstoptime.is_(None)).count(),
+        "online_sessions": db.query(RadAcct).filter(*fresh_active_session_conditions()).count(),
         "revenue_placeholder": 0,
     }
 

@@ -32,6 +32,9 @@ class Settings:
     radius_disconnect_timeout_seconds: int = max(
         1, min(30, int(os.getenv("RADIUS_DISCONNECT_TIMEOUT_SECONDS", "12")))
     )
+    radius_session_freshness_seconds: int = max(
+        60, min(3600, int(os.getenv("RADIUS_SESSION_FRESHNESS_SECONDS", "900")))
+    )
     radius_disconnect_nas_allowlist: tuple[str, ...] = tuple(
         item.strip()
         for item in os.getenv("RADIUS_DISCONNECT_NAS_ALLOWLIST", "").split(",")
