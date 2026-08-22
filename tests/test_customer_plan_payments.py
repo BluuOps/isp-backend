@@ -400,6 +400,7 @@ class PaymentSecurityPrimitiveTests(unittest.TestCase):
                 "CustomerPortalAccount": account,
                 "Organization": organization,
                 "Customer": customer,
+                "AuthTokenRevocation": None,
             }[model.__name__]
             result = MagicMock()
             result.filter.return_value.first.return_value = row
@@ -427,6 +428,7 @@ class PaymentSecurityPrimitiveTests(unittest.TestCase):
             "principal_type": "customer",
             "organization_id": 20,
             "customer_id": "M41_SF_ACCEPT_SUSPENDED",
+            "jti": "customer-context-active",
         }
 
         with (
@@ -465,6 +467,7 @@ class PaymentSecurityPrimitiveTests(unittest.TestCase):
             "principal_type": "customer",
             "organization_id": 20,
             "customer_id": "M41_SF_ACCEPT_SUSPENDED",
+            "jti": "customer-context-cross-tenant",
         }
 
         with (

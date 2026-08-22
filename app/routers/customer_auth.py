@@ -19,6 +19,7 @@ from app.schemas.customer_auth import (
 )
 from app.services.audit import record_audit
 from app.services.security import hash_password, verify_password
+from app.services.token_revocation import ensure_token_not_revoked, revoke_token, token_fingerprint
 
 
 router = APIRouter(prefix="/customer-auth", tags=["Customer Authentication"])
@@ -56,10 +57,17 @@ def _token(account: CustomerPortalAccount, organization: Organization) -> str:
     )
 
 
-def _account_from_token(db: Session, authorization: str | None) -> tuple[CustomerPortalAccount, Organization]:
+def _account_from_token(
+    db: Session,
+    authorization: str | None,
+    *,
+    enforce_revocation: bool = True,
+) -> tuple[CustomerPortalAccount, Organization, dict]:
     payload = bearer_payload(authorization)
     if not payload or payload.get("principal_type") != "customer":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing customer token")
+    if enforce_revocation:
+        ensure_token_not_revoked(db, payload)
 
     account = (
         db.query(CustomerPortalAccount)
@@ -74,9 +82,9 @@ def _account_from_token(db: Session, authorization: str | None) -> tuple[Custome
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid customer token")
 
     organization = db.query(Organization).filter(Organization.id == account.organization_id).first()
-    if not organization:
+    if not organization or organization.status != ACTIVE_STATUS:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid customer organization")
-    return account, organization
+    return account, organization, payload
 
 
 @router.post("/login", response_model=CustomerAuthResponse)
@@ -84,6 +92,8 @@ def login(payload: CustomerAuthLoginRequest, request: Request, db: Session = Dep
     identifier = normalize_identifier(payload.identifier)
     tenant_context = resolve_tenant_from_request(request, db)
     organization = tenant_context.organization
+    if organization.status != ACTIVE_STATUS:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # Temporary staging compatibility only. The hostname resolver remains the
     # authoritative source; frontend-provided tenant fields are ignored unless
@@ -158,7 +168,7 @@ def login(payload: CustomerAuthLoginRequest, request: Request, db: Session = Dep
 
 @router.get("/me", response_model=CustomerAuthResponse)
 def me(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> CustomerAuthResponse:
-    account, organization = _account_from_token(db, authorization)
+    account, organization, _ = _account_from_token(db, authorization)
     return CustomerAuthResponse(token=authorization.split(" ", 1)[1], user=_auth_user(account, organization))
 
 
@@ -185,7 +195,26 @@ def tenant(request: Request, db: Session = Depends(get_db)) -> CustomerTenantRes
 
 
 @router.post("/logout")
-def logout() -> dict[str, str]:
+def logout(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    account, _, payload = _account_from_token(db, authorization, enforce_revocation=False)
+    created = revoke_token(db, payload)
+    if created:
+        record_audit(
+            db,
+            organization_id=account.organization_id,
+            actor_type="customer",
+            actor_id=str(account.id),
+            actor_label=account.email,
+            actor=account.email,
+            action="auth.logout",
+            target_type="auth_token",
+            target_id=token_fingerprint(payload),
+            new_value={"reason": "logout"},
+        )
+    db.commit()
     return {"status": "ok"}
 
 
@@ -195,7 +224,7 @@ def change_password(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
-    account, _ = _account_from_token(db, authorization)
+    account, _, _ = _account_from_token(db, authorization)
     if not verify_password(payload.current_password, account.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     account.password_hash = hash_password(payload.new_password)

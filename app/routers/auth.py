@@ -1,11 +1,6 @@
-import base64
-import hashlib
-import hmac
-import json
 import secrets
 import time
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -15,23 +10,27 @@ from app.core.authorization import (
     AuthenticatedPrincipal,
     PrincipalType,
     create_access_token,
+    decode_access_token,
     get_authenticated_principal,
     role_permissions,
 )
 from app.core.config import settings
-from app.core.principal import ORGANIZATION_BRIDGE_PERMISSIONS, PLATFORM_PERMISSIONS
+from app.core.principal import (
+    ORGANIZATION_BRIDGE_PERMISSIONS,
+    PLATFORM_PERMISSIONS,
+    create_principal_token,
+    decode_principal_token,
+)
 from app.core.tenant_host import request_hostname, resolve_tenant_from_request
 from app.database import get_db
 from app.models.organization import Organization
 from app.models.organization_staff import OrganizationStaff
 from app.services.audit import record_audit
 from app.services.security import verify_password
+from app.services.token_revocation import ensure_token_not_revoked, revoke_token, token_fingerprint
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-TOKEN_TTL_SECONDS = 12 * 60 * 60
-
 
 class LoginRequest(BaseModel):
     email: str = Field(min_length=1)
@@ -85,44 +84,6 @@ def _require_internal_auth_config() -> tuple[str, str, str]:
             detail="Internal authentication bridge is not configured",
         )
     return settings.internal_admin_email, settings.internal_admin_password, settings.jwt_secret
-
-
-def _b64url_encode(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-
-def _b64url_decode(raw: str) -> bytes:
-    return base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
-
-
-def _sign(payload: str, secret: str) -> str:
-    return _b64url_encode(hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest())
-
-
-def _create_token(payload: dict[str, Any], secret: str) -> str:
-    encoded_payload = _b64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    return f"{encoded_payload}.{_sign(encoded_payload, secret)}"
-
-
-def _decode_token(token: str, secret: str) -> dict[str, Any]:
-    try:
-        encoded_payload, signature = token.split(".", 1)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
-
-    expected = _sign(encoded_payload, secret)
-    if not secrets.compare_digest(signature, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
-    try:
-        payload = json.loads(_b64url_decode(encoded_payload))
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
-
-    expires_at = int(payload.get("exp", 0))
-    if expires_at < int(time.time()):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
-    return payload
 
 
 def _get_organization_from_claims(db: Session, organization_id: object, organization_slug: object) -> Organization:
@@ -244,15 +205,14 @@ def _platform_auth_response(email: str, token: str) -> AuthResponse:
 @router.post("/login", response_model=AuthResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> AuthResponse:
     if _platform_host(request):
-        configured_email, configured_password, secret = _require_platform_auth_config()
+        configured_email, configured_password, _ = _require_platform_auth_config()
         if not secrets.compare_digest(payload.email.lower(), configured_email.lower()) or not secrets.compare_digest(
             payload.password,
             configured_password,
         ):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-        now = int(time.time())
-        token = _create_token(
+        token = create_principal_token(
             {
                 "sub": "platform-admin",
                 "principal_type": "platform_admin",
@@ -260,10 +220,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 "role": "super_admin",
                 "roles": ["platform_admin"],
                 "permissions": PLATFORM_PERMISSIONS,
-                "iat": now,
-                "exp": now + TOKEN_TTL_SECONDS,
             },
-            secret,
         )
         return _platform_auth_response(configured_email, token)
 
@@ -298,7 +255,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "tenant_id": organization.slug,
             "auth_method": authentication_method,
             "iat": now,
-            "exp": now + TOKEN_TTL_SECONDS,
+            "exp": now + settings.auth_access_token_ttl_seconds,
             "iss": settings.auth_token_issuer,
             "aud": settings.auth_token_audience,
             "jti": uuid.uuid4().hex,
@@ -337,9 +294,10 @@ def me(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication is not configured",
         )
-    payload = _decode_token(token, settings.jwt_secret)
+    payload = decode_principal_token(token)
     token = authorization.split(" ", 1)[1]
     if payload.get("principal_type") == "platform_admin":
+        ensure_token_not_revoked(db, payload)
         return _platform_auth_response(str(payload.get("email", settings.platform_admin_email)), token)
     principal = get_authenticated_principal(authorization, db)
     staff_id = int(principal.subject_id.split(":", 1)[1])
@@ -363,5 +321,35 @@ def me(
 
 
 @router.post("/logout")
-def logout() -> dict[str, str]:
+def logout(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+    if not settings.jwt_secret:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Authentication is not configured")
+    token = authorization.split(" ", 1)[1].strip()
+    payload = decode_principal_token(token)
+    principal_type = payload.get("principal_type")
+    if principal_type == PrincipalType.ORGANIZATION_STAFF.value:
+        payload = decode_access_token(token, settings.jwt_secret)
+    elif principal_type != PrincipalType.PLATFORM_ADMIN.value:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unsupported principal type")
+
+    created = revoke_token(db, payload)
+    if created:
+        record_audit(
+            db,
+            organization_id=payload.get("organization_id"),
+            actor_type=str(principal_type),
+            actor_id=str(payload.get("sub")),
+            actor_label=str(payload.get("email") or payload.get("sub")),
+            actor=str(payload.get("email") or payload.get("sub")),
+            action="auth.logout",
+            target_type="auth_token",
+            target_id=token_fingerprint(payload),
+            new_value={"reason": "logout"},
+        )
+    db.commit()
     return {"status": "ok"}

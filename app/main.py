@@ -54,6 +54,7 @@ def readiness() -> dict[str, object]:
         "support_tickets", "ticket_messages", "payment_webhook_events",
         "network_access_servers",
         "expiry_scan_runs", "expiry_disconnect_jobs",
+        "auth_token_revocations",
     }
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
@@ -78,7 +79,7 @@ def readiness() -> dict[str, object]:
             and os.access(settings.radclient_bin, os.X_OK)
         ),
         "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
-        "migration_status": migration_current == "0012_expiry_enforcement",
+        "migration_status": migration_current == "0013_auth_token_revocations",
     }
     ready = all(value for value in checks.values() if isinstance(value, bool))
     return {"status": "ready" if ready else "not_ready", "checks": checks}

@@ -55,6 +55,7 @@ from app.services.payment_service import initialize_customer_renewal, process_ve
 from app.services.payment_quote import create_quote, read_quote
 from app.services.radius_session_freshness import fresh_active_session_conditions
 from app.services.security_events import emit_customer_object_denial
+from app.services.token_revocation import ensure_token_not_revoked
 
 
 router = APIRouter(prefix="/customer-portal", tags=["Customer Portal"])
@@ -110,6 +111,7 @@ def get_customer_portal_context(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing customer token")
     if payload.get("principal_type") != "customer":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Customer portal access requires a customer token")
+    ensure_token_not_revoked(db, payload)
 
     try:
         account_id = int(payload["sub"])
@@ -136,7 +138,7 @@ def get_customer_portal_context(
         .filter(Customer.id == customer_id, Customer.organization_id == organization_id)
         .first()
     )
-    if not organization or not customer:
+    if not organization or organization.status != "active" or not customer:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid customer token")
     tenant_context = resolve_tenant_from_request(request, db)
     if tenant_context.organization.id != organization_id:

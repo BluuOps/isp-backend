@@ -67,6 +67,14 @@ class Settings:
         "AUTH_TOKEN_AUDIENCE",
         "radiusfiber-organization-api",
     )
+    auth_access_token_ttl_seconds: int = max(
+        300,
+        min(12 * 60 * 60, int(os.getenv("AUTH_ACCESS_TOKEN_TTL_SECONDS", "3600"))),
+    )
+    auth_token_revocation_cleanup_batch_size: int = max(
+        1,
+        min(1000, int(os.getenv("AUTH_TOKEN_REVOCATION_CLEANUP_BATCH_SIZE", "100"))),
+    )
     platform_admin_api_key: str | None = os.getenv("PLATFORM_ADMIN_API_KEY")
     platform_admin_email: str | None = os.getenv("PLATFORM_ADMIN_EMAIL")
     platform_admin_password: str | None = os.getenv("PLATFORM_ADMIN_PASSWORD")

@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.organization import Organization
 from app.models.organization_staff import OrganizationStaff
+from app.services.token_revocation import ensure_token_not_revoked
 
 
 class PrincipalType(str, Enum):
@@ -250,6 +251,8 @@ def decode_access_token(
     }
     if not isinstance(payload, dict) or required - payload.keys():
         raise HTTPException(status_code=401, detail="Token claims are incomplete")
+    if not isinstance(payload["jti"], str) or not payload["jti"]:
+        raise HTTPException(status_code=401, detail="Token claims are incomplete")
     if payload["token_type"] != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
     if payload["principal_type"] != PrincipalType.ORGANIZATION_STAFF.value:
@@ -287,6 +290,7 @@ def get_authenticated_principal(
     if not settings.jwt_secret:
         raise HTTPException(status_code=503, detail="Authentication is not configured")
     payload = decode_access_token(_bearer_token(authorization), settings.jwt_secret)
+    ensure_token_not_revoked(db, payload)
     try:
         staff_id = int(payload["staff_id"])
         organization_id = int(payload["organization_id"])

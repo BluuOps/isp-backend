@@ -26,6 +26,7 @@ from app.main import app
 from app.models.organization import Organization
 from app.models.organization_staff import OrganizationStaff
 from app.models.customer import Customer
+from app.models.auth_token_revocation import AuthTokenRevocation
 from app.services.security import (
     generate_temporary_password,
     hash_password,
@@ -128,6 +129,8 @@ class FakeDB:
         self.organization = organization
 
     def query(self, model):
+        if model is AuthTokenRevocation:
+            return FakeQuery(None)
         if model is OrganizationStaff:
             return FakeQuery(self.staff)
         if model is Organization:

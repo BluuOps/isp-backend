@@ -1,4 +1,5 @@
 from app.models.audit_log import AuditLog
+from app.models.auth_token_revocation import AuthTokenRevocation
 from app.models.billing import BillingAccount
 from app.models.customer import Customer
 from app.models.customer_portal_account import CustomerPortalAccount
@@ -24,6 +25,7 @@ from app.models.zone import Zone
 
 __all__ = [
     "AuditLog",
+    "AuthTokenRevocation",
     "BillingAccount",
     "Customer",
     "CustomerPortalAccount",

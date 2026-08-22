@@ -31,6 +31,7 @@ REQUIRED_TABLES = {
     "network_access_servers",
     "expiry_scan_runs",
     "expiry_disconnect_jobs",
+    "auth_token_revocations",
     "alembic_version",
 }
 
@@ -120,8 +121,8 @@ class HealthReadinessTests(unittest.IsolatedAsyncioTestCase):
         )
         return status, json.loads(body)
 
-    async def test_current_0012_revision_is_ready(self):
-        status, body = await self._request("0012_expiry_enforcement")
+    async def test_current_0013_revision_is_ready(self):
+        status, body = await self._request("0013_auth_token_revocations")
 
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ready")
