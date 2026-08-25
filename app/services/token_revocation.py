@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -45,19 +45,35 @@ def ensure_token_not_revoked(db: Session, payload: dict[str, Any]) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
 
 
-def cleanup_expired_revocations(db: Session, *, batch_size: int | None = None) -> int:
+def cleanup_expired_revocations(
+    db: Session,
+    *,
+    batch_size: int | None = None,
+    retention_seconds: int | None = None,
+) -> int:
     """Remove one deterministic bounded batch using PostgreSQL's clock.
 
     Callers may invoke this repeatedly to drain a backlog. The composite
     ``(expires_at, id)`` index supports the expiry predicate and stable order.
+    A revocation remains stored until its JWT expiry plus the configured clock-
+    skew retention interval. At the exact retention boundary it becomes
+    eligible for deletion; before that boundary it remains enforceable.
     """
     limit = settings.auth_token_revocation_cleanup_batch_size if batch_size is None else batch_size
     if limit < 1 or limit > 1000:
         raise ValueError("Revocation cleanup batch size must be between 1 and 1000")
+    retention = (
+        settings.auth_token_revocation_retention_seconds
+        if retention_seconds is None
+        else retention_seconds
+    )
+    if retention < 60 or retention > 3600:
+        raise ValueError("Revocation retention must be between 60 and 3600 seconds")
+    cutoff = func.current_timestamp() - timedelta(seconds=retention)
     expired_ids = list(
         db.scalars(
             select(AuthTokenRevocation.id)
-            .where(AuthTokenRevocation.expires_at <= func.current_timestamp())
+            .where(AuthTokenRevocation.expires_at <= cutoff)
             .order_by(AuthTokenRevocation.expires_at, AuthTokenRevocation.id)
             .limit(limit)
             .with_for_update(skip_locked=True)

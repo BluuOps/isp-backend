@@ -75,6 +75,10 @@ class Settings:
         1,
         min(1000, int(os.getenv("AUTH_TOKEN_REVOCATION_CLEANUP_BATCH_SIZE", "100"))),
     )
+    auth_token_revocation_retention_seconds: int = max(
+        60,
+        min(3600, int(os.getenv("AUTH_TOKEN_REVOCATION_RETENTION_SECONDS", "300"))),
+    )
     platform_admin_api_key: str | None = os.getenv("PLATFORM_ADMIN_API_KEY")
     platform_admin_email: str | None = os.getenv("PLATFORM_ADMIN_EMAIL")
     platform_admin_password: str | None = os.getenv("PLATFORM_ADMIN_PASSWORD")

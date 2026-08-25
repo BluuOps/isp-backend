@@ -173,9 +173,13 @@ class RevocationPersistenceTests(unittest.TestCase):
         db = MagicMock()
         db.scalars.return_value = [7, 8]
         db.execute.return_value.rowcount = 2
-        self.assertEqual(cleanup_expired_revocations(db, batch_size=2), 2)
+        self.assertEqual(
+            cleanup_expired_revocations(db, batch_size=2, retention_seconds=300),
+            2,
+        )
         selection = str(db.scalars.call_args.args[0]).upper()
         self.assertIn("CURRENT_TIMESTAMP", selection)
+        self.assertIn("EXPIRES_AT <= CURRENT_TIMESTAMP", selection)
         self.assertIn("ORDER BY", selection)
         self.assertIn("EXPIRES_AT", selection)
         self.assertIn("AUTH_TOKEN_REVOCATIONS.ID", selection)
@@ -196,6 +200,13 @@ class RevocationPersistenceTests(unittest.TestCase):
             cleanup_expired_revocations(db, batch_size=0)
         with self.assertRaises(ValueError):
             cleanup_expired_revocations(db, batch_size=1001)
+
+    def test_cleanup_retention_is_securely_bounded(self):
+        db = MagicMock()
+        with self.assertRaises(ValueError):
+            cleanup_expired_revocations(db, retention_seconds=59)
+        with self.assertRaises(ValueError):
+            cleanup_expired_revocations(db, retention_seconds=3601)
 
     def test_cleanup_failure_does_not_discard_new_revocation(self):
         from sqlalchemy.exc import SQLAlchemyError
