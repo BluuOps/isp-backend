@@ -6,6 +6,7 @@ import hmac
 import json
 import secrets
 import time
+import uuid
 from typing import Any, Literal
 
 from fastapi import Header, HTTPException, status
@@ -73,9 +74,18 @@ def _sign(payload: str, secret: str) -> str:
     return _b64url_encode(hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest())
 
 
-def create_principal_token(payload: dict[str, Any], ttl_seconds: int = 12 * 60 * 60) -> str:
+def create_principal_token(payload: dict[str, Any], ttl_seconds: int | None = None) -> str:
     now = int(time.time())
-    claims = {"iat": now, "exp": now + ttl_seconds, **payload}
+    lifetime = settings.auth_access_token_ttl_seconds if ttl_seconds is None else ttl_seconds
+    claims = {
+        "token_type": "access",
+        "iss": settings.auth_token_issuer,
+        "aud": settings.auth_token_audience,
+        "jti": uuid.uuid4().hex,
+        "iat": now,
+        "exp": now + lifetime,
+        **payload,
+    }
     encoded_payload = _b64url_encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
     return f"{encoded_payload}.{_sign(encoded_payload, _require_jwt_secret())}"
 
@@ -95,7 +105,22 @@ def decode_principal_token(token: str) -> dict[str, Any]:
     except (ValueError, json.JSONDecodeError) as exc:
         raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Invalid bearer token.") from exc
 
-    if int(payload.get("exp", 0)) < int(time.time()):
+    required = {"sub", "principal_type", "token_type", "iat", "exp", "iss", "aud", "jti"}
+    if not isinstance(payload, dict) or required - payload.keys():
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Token claims are incomplete.")
+    if not isinstance(payload["jti"], str) or not payload["jti"]:
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Token claims are incomplete.")
+    if payload["token_type"] != "access":
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Invalid token type.")
+    if payload["iss"] != settings.auth_token_issuer or payload["aud"] != settings.auth_token_audience:
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Invalid token audience.")
+    now = int(time.time())
+    try:
+        issued_at = int(payload["iat"])
+        expires_at = int(payload["exp"])
+    except (TypeError, ValueError) as exc:
+        raise _auth_error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "Invalid token timestamps.") from exc
+    if issued_at > now + 60 or expires_at <= now:
         raise _auth_error(status.HTTP_401_UNAUTHORIZED, "token_expired", "Bearer token has expired.")
     return payload
 

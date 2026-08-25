@@ -1,18 +1,23 @@
 import secrets
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
 
 from app.core.authorization import AuthenticatedPrincipal, PrincipalType
 from app.core.config import settings
 from app.core.principal import bearer_payload
+from app.database import get_db
+from app.services.token_revocation import ensure_token_not_revoked
 
 
 def require_platform_principal(
     authorization: str | None = Header(default=None),
     x_platform_admin_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
 ) -> AuthenticatedPrincipal:
     payload = bearer_payload(authorization)
     if payload and payload.get("principal_type") == "platform_admin":
+        ensure_token_not_revoked(db, payload)
         return AuthenticatedPrincipal(
             subject_id=str(payload.get("sub", "platform-admin")),
             principal_type=PrincipalType.PLATFORM_ADMIN,

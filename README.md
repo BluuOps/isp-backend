@@ -164,3 +164,21 @@ cp -a ~/backend-backups/BACKUP_NAME/app ~/isp-platform/backend/app
 cp -a ~/backend-backups/BACKUP_NAME/init_db.py ~/isp-platform/backend/init_db.py 2>/dev/null || true
 sudo systemctl start radiusfiber-backend
 ```
+# Authentication token compatibility and cleanup
+
+Access tokens issued from migration `0013_auth_token_revocations` onward contain
+a nonempty `jti`. Tokens issued before this claim was introduced are rejected
+and users must sign in again after deployment. No fallback identifier is
+generated from a legacy token, and raw tokens/JTIs are never persisted.
+
+Logout performs one opportunistic, savepoint-isolated cleanup batch (100 rows by
+default, configurable with `AUTH_TOKEN_REVOCATION_CLEANUP_BATCH_SIZE`). PostgreSQL
+`CURRENT_TIMESTAMP` selects rows in deterministic `(expires_at, id)` order only
+after JWT expiry plus a clock-skew retention interval. The retention defaults to
+300 seconds and is bounded to 60-3600 seconds through
+`AUTH_TOKEN_REVOCATION_RETENTION_SECONDS`. The exact retention boundary is
+deletion-eligible; rows before it remain enforceable. Repeated logout activity
+drains a backlog without adding cleanup work to ordinary token validation. A
+future high-volume deployment may add a scheduled maintenance command that
+repeatedly calls the same bounded cleanup function; that command is intentionally
+outside the current release scope.
