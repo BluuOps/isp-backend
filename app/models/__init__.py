@@ -6,6 +6,10 @@ from app.models.customer_portal_account import CustomerPortalAccount
 from app.models.feature_flag import FeatureFlag
 from app.models.expiry import ExpiryDisconnectJob, ExpiryScanRun
 from app.models.notification_setting import NotificationSetting
+from app.models.olt_association import OltServiceAssociation
+from app.models.olt_device import OltCredentialReference, OltDevice
+from app.models.olt_inventory import OltCard, OltOnu, OltPonPort, OltUplink
+from app.models.olt_polling import OltPollRun
 from app.models.network_access_server import NetworkAccessServer
 from app.models.organization import Organization
 from app.models.organization_billing_profile import OrganizationBillingProfile
@@ -39,6 +43,14 @@ __all__ = [
     "PaymentTransaction",
     "PaymentWebhookEvent",
     "NotificationSetting",
+    "OltCredentialReference",
+    "OltDevice",
+    "OltCard",
+    "OltUplink",
+    "OltPonPort",
+    "OltOnu",
+    "OltServiceAssociation",
+    "OltPollRun",
     "NetworkAccessServer",
     "Platform",
     "RadAcct",

@@ -76,13 +76,82 @@ class Permission:
     NETWORK_ZONES_CREATE = "network.zones.create"
     NETWORK_ZONES_UPDATE = "network.zones.update"
     NETWORK_ZONES_DELETE = "network.zones.delete"
+    OLT_INVENTORY_READ = "olt.inventory.read"
+    OLT_TELEMETRY_READ = "olt.telemetry.read"
+    OLT_ALARMS_READ = "olt.alarms.read"
+    OLT_AUDIT_READ = "olt.audit.read"
+    OLT_DEVICES_MANAGE = "olt.devices.manage"
+    OLT_CONNECTIONS_TEST = "olt.connections.test"
+    OLT_POLL_REQUEST = "olt.poll.request"
+    OLT_ASSOCIATIONS_MANAGE = "olt.associations.manage"
 
 
-ALL_ORGANIZATION_PERMISSIONS = frozenset(
-    value
-    for name, value in vars(Permission).items()
-    if name.isupper() and isinstance(value, str)
+OLT_FOUNDATION_PERMISSIONS = frozenset(
+    {
+        Permission.OLT_INVENTORY_READ,
+        Permission.OLT_TELEMETRY_READ,
+        Permission.OLT_ALARMS_READ,
+        Permission.OLT_AUDIT_READ,
+        Permission.OLT_DEVICES_MANAGE,
+        Permission.OLT_CONNECTIONS_TEST,
+        Permission.OLT_POLL_REQUEST,
+        Permission.OLT_ASSOCIATIONS_MANAGE,
+    }
 )
+
+# This explicit list prevents a future OLT write permission from becoming active
+# merely because a new uppercase constant is added to Permission.
+ALL_ORGANIZATION_PERMISSIONS = frozenset(
+    {
+        Permission.ORGANIZATION_PROFILE_READ,
+        Permission.ORGANIZATION_PROFILE_UPDATE,
+        Permission.ORGANIZATION_STAFF_READ,
+        Permission.ORGANIZATION_STAFF_MANAGE,
+        Permission.ORGANIZATION_SETTINGS_READ,
+        Permission.ORGANIZATION_SETTINGS_UPDATE,
+        Permission.ORGANIZATION_SUBSCRIPTION_READ,
+        Permission.ORGANIZATION_FEATURE_FLAGS_READ,
+        Permission.ORGANIZATION_FEATURE_FLAGS_MANAGE,
+        Permission.ORGANIZATION_AUDIT_LOGS_READ,
+        Permission.CUSTOMERS_READ,
+        Permission.CUSTOMERS_CREATE,
+        Permission.CUSTOMERS_UPDATE,
+        Permission.CUSTOMERS_DELETE,
+        Permission.SUBSCRIBERS_READ,
+        Permission.SUBSCRIBERS_CREATE,
+        Permission.SUBSCRIBERS_UPDATE,
+        Permission.SUBSCRIBERS_DELETE,
+        Permission.SUBSCRIBERS_SUSPEND,
+        Permission.SUBSCRIBERS_RECONNECT,
+        Permission.SUBSCRIBERS_RECHARGE,
+        Permission.SUBSCRIBERS_PASSWORD_CHANGE,
+        Permission.SUBSCRIBERS_PLAN_CHANGE,
+        Permission.RADIUS_SESSIONS_READ,
+        Permission.RADIUS_SESSIONS_DISCONNECT,
+        Permission.PLANS_READ,
+        Permission.PLANS_CREATE,
+        Permission.PLANS_UPDATE,
+        Permission.PLANS_DELETE,
+        Permission.BILLING_ACCOUNTS_READ,
+        Permission.BILLING_ACCOUNTS_CREATE,
+        Permission.BILLING_ACCOUNTS_UPDATE,
+        Permission.BILLING_ACCOUNTS_DELETE,
+        Permission.PAYMENTS_READ,
+        Permission.PAYMENTS_CREATE,
+        Permission.PAYMENTS_UPDATE,
+        Permission.PAYMENTS_VERIFY,
+        Permission.PAYMENTS_EXPORT,
+        Permission.PAYMENTS_PLAN_ACTIVATE,
+        Permission.NETWORK_NAS_READ,
+        Permission.NETWORK_NAS_CREATE,
+        Permission.NETWORK_NAS_UPDATE,
+        Permission.NETWORK_NAS_DELETE,
+        Permission.NETWORK_ZONES_READ,
+        Permission.NETWORK_ZONES_CREATE,
+        Permission.NETWORK_ZONES_UPDATE,
+        Permission.NETWORK_ZONES_DELETE,
+    }
+) | OLT_FOUNDATION_PERMISSIONS
 
 READ_ONLY_PERMISSIONS = frozenset(
     {
@@ -94,6 +163,9 @@ READ_ONLY_PERMISSIONS = frozenset(
         Permission.PLANS_READ,
         Permission.NETWORK_NAS_READ,
         Permission.NETWORK_ZONES_READ,
+        Permission.OLT_INVENTORY_READ,
+        Permission.OLT_TELEMETRY_READ,
+        Permission.OLT_ALARMS_READ,
     }
 )
 
@@ -121,6 +193,13 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Permission.NETWORK_ZONES_READ,
             Permission.NETWORK_ZONES_CREATE,
             Permission.NETWORK_ZONES_UPDATE,
+            Permission.OLT_INVENTORY_READ,
+            Permission.OLT_TELEMETRY_READ,
+            Permission.OLT_ALARMS_READ,
+            Permission.OLT_AUDIT_READ,
+            Permission.OLT_CONNECTIONS_TEST,
+            Permission.OLT_POLL_REQUEST,
+            Permission.OLT_ASSOCIATIONS_MANAGE,
         }
     ),
     "Billing": frozenset(
@@ -151,6 +230,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Permission.PLANS_READ,
             Permission.NETWORK_NAS_READ,
             Permission.NETWORK_ZONES_READ,
+            Permission.OLT_INVENTORY_READ,
+            Permission.OLT_TELEMETRY_READ,
         }
     ),
     "Field Engineer": frozenset(
@@ -162,6 +243,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Permission.PLANS_READ,
             Permission.NETWORK_NAS_READ,
             Permission.NETWORK_ZONES_READ,
+            Permission.OLT_INVENTORY_READ,
+            Permission.OLT_TELEMETRY_READ,
         }
     ),
     "Read Only": READ_ONLY_PERMISSIONS,

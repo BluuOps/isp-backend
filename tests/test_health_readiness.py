@@ -32,6 +32,14 @@ REQUIRED_TABLES = {
     "expiry_scan_runs",
     "expiry_disconnect_jobs",
     "auth_token_revocations",
+    "olt_credential_references",
+    "olt_devices",
+    "olt_cards",
+    "olt_uplinks",
+    "olt_pon_ports",
+    "olt_onus",
+    "olt_service_associations",
+    "olt_poll_runs",
     "alembic_version",
 }
 
@@ -121,8 +129,8 @@ class HealthReadinessTests(unittest.IsolatedAsyncioTestCase):
         )
         return status, json.loads(body)
 
-    async def test_current_0013_revision_is_ready(self):
-        status, body = await self._request("0013_auth_token_revocations")
+    async def test_current_0014_revision_is_ready(self):
+        status, body = await self._request("0014_olt_inventory_foundation")
 
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ready")
