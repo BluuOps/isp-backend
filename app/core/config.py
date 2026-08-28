@@ -79,6 +79,17 @@ class Settings:
         60,
         min(3600, int(os.getenv("AUTH_TOKEN_REVOCATION_RETENTION_SECONDS", "300"))),
     )
+    olt_management_networks: tuple[str, ...] = tuple(
+        item.strip()
+        for item in os.getenv(
+            "OLT_MANAGEMENT_NETWORKS",
+            "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+        ).split(",")
+        if item.strip()
+    )
+    olt_integration_enabled: bool = os.getenv("OLT_INTEGRATION_ENABLED", "false").lower() in {
+        "1", "true", "yes", "on",
+    }
     platform_admin_api_key: str | None = os.getenv("PLATFORM_ADMIN_API_KEY")
     platform_admin_email: str | None = os.getenv("PLATFORM_ADMIN_EMAIL")
     platform_admin_password: str | None = os.getenv("PLATFORM_ADMIN_PASSWORD")

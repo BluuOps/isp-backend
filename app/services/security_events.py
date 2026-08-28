@@ -65,3 +65,38 @@ def emit_customer_object_denial(
             sys.stderr.write("radiusfiber_security_event_emission_failed\n")
         except Exception:
             pass
+
+
+def emit_olt_access_denial(
+    request: Request,
+    *,
+    principal_type: str,
+    subject_id: object,
+    organization_id: int,
+    resource_type: str,
+    resource_id: object,
+    route_template: str,
+) -> None:
+    """Emit a bounded OLT denial event without writing to the database."""
+
+    event: dict[str, Any] = {
+        "event_version": 1,
+        "event_name": "olt.cross_tenant_access_rejected",
+        "correlation_id": _request_correlation_id(request),
+        "principal_type": _safe_identifier(principal_type),
+        "subject_id": _safe_identifier(subject_id),
+        "organization_id": int(organization_id),
+        "resource_type": _safe_identifier(resource_type),
+        "resource_id": _safe_identifier(resource_id),
+        "denial_reason": "not_owned_or_not_found",
+        "route": route_template,
+        "method": request.method,
+        "status_code": 404,
+    }
+    try:
+        logger.warning(json.dumps(event, separators=(",", ":"), sort_keys=True), extra={"security_event": event})
+    except Exception:
+        try:
+            sys.stderr.write("radiusfiber_security_event_emission_failed\n")
+        except Exception:
+            pass

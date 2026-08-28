@@ -4,7 +4,17 @@ from sqlalchemy.orm import Session
 
 from app.models import AuditLog
 
-SENSITIVE_KEYS = {"password", "password_hash", "secret", "token", "temporary_password"}
+SENSITIVE_KEY_MARKERS = {
+    "authorization",
+    "community",
+    "cookie",
+    "credential",
+    "passphrase",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+}
 ACTOR_TYPE_MAP = {
     "platform-admin": "platform_admin",
     "internal-admin": "organization_staff",
@@ -13,10 +23,28 @@ ACTOR_TYPE_MAP = {
 }
 
 
+def _sensitive_key(key: object) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
+    return any(marker in normalized for marker in SENSITIVE_KEY_MARKERS)
+
+
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if _sensitive_key(key) else _redact_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(item) for item in value)
+    return value
+
+
 def redact(value: dict[str, Any] | None) -> dict[str, Any] | None:
     if value is None:
         return None
-    return {key: "[REDACTED]" if key.lower() in SENSITIVE_KEYS else item for key, item in value.items()}
+    return _redact_value(value)
 
 
 def record_audit(

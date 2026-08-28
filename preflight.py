@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app import app
 from app.database import Base
-from app.models import AuthTokenRevocation, CustomerPortalAccount, ExpiryDisconnectJob, ExpiryScanRun, NetworkAccessServer, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
+from app.models import AuthTokenRevocation, CustomerPortalAccount, ExpiryDisconnectJob, ExpiryScanRun, NetworkAccessServer, OltCredentialReference, OltDevice, OltOnu, OltPollRun, OltServiceAssociation, PaymentTransaction, PaymentWebhookEvent, RadAcct, RadCheck, RadReply, ServicePlan, SupportTicket, TicketMessage, User
 from app.schemas import (
     CustomerAuthLoginRequest,
     CustomerAuthResponse,
@@ -119,6 +119,38 @@ def main() -> None:
         ("POST", "/radius/disconnect"),
         ("POST", "/webhooks/payments/paystack"),
         ("POST", "/webhooks/payments/paystack/{integration_key}"),
+        ("GET", "/organization/olt/v1/overview"),
+        ("GET", "/organization/olt/v1/devices"),
+        ("POST", "/organization/olt/v1/devices"),
+        ("GET", "/organization/olt/v1/devices/{device_id}"),
+        ("PATCH", "/organization/olt/v1/devices/{device_id}"),
+        ("GET", "/organization/olt/v1/devices/{device_id}/system-info"),
+        ("GET", "/organization/olt/v1/devices/{device_id}/cards"),
+        ("GET", "/organization/olt/v1/devices/{device_id}/uplinks"),
+        ("GET", "/organization/olt/v1/devices/{device_id}/pon-ports"),
+        ("GET", "/organization/olt/v1/devices/{device_id}/onus"),
+        ("GET", "/organization/olt/v1/devices/{device_id}/poll-runs"),
+        ("GET", "/organization/olt/v1/onus/{onu_id}"),
+        ("GET", "/organization/olt/v1/associations"),
+        ("POST", "/organization/olt/v1/associations"),
+        ("DELETE", "/organization/olt/v1/associations/{association_id}"),
+        ("GET", "/organization/olt/v1/audit-events"),
+        ("POST", "/organization/olt/v1/devices/{device_id}/connection-tests"),
+        ("POST", "/organization/olt/v1/devices/{device_id}/refresh-requests"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/overview"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/devices"),
+        ("POST", "/platform/organizations/{organization_id}/olt/v1/devices"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/devices/{device_id}"),
+        ("PATCH", "/platform/organizations/{organization_id}/olt/v1/devices/{device_id}"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/devices/{device_id}/system-info"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/devices/{device_id}/cards"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/devices/{device_id}/uplinks"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/devices/{device_id}/pon-ports"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/devices/{device_id}/onus"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/devices/{device_id}/poll-runs"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/onus/{onu_id}"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/associations"),
+        ("GET", "/platform/organizations/{organization_id}/olt/v1/audit-events"),
     }
     missing_routes = required_routes.difference(route_inventory)
     if missing_routes:
@@ -163,6 +195,14 @@ def main() -> None:
         "expiry_scan_runs",
         "expiry_disconnect_jobs",
         "auth_token_revocations",
+        "olt_credential_references",
+        "olt_devices",
+        "olt_cards",
+        "olt_uplinks",
+        "olt_pon_ports",
+        "olt_onus",
+        "olt_service_associations",
+        "olt_poll_runs",
     }
     metadata_tables = set(Base.metadata.tables)
     missing_tables = expected_tables.difference(metadata_tables)
@@ -184,6 +224,11 @@ def main() -> None:
         ExpiryScanRun.__name__,
         ExpiryDisconnectJob.__name__,
         AuthTokenRevocation.__name__,
+        OltCredentialReference.__name__,
+        OltDevice.__name__,
+        OltOnu.__name__,
+        OltServiceAssociation.__name__,
+        OltPollRun.__name__,
         CustomerPortalAccount.__name__,
         SupportTicket.__name__,
         TicketMessage.__name__,

@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import settings
 from app.core.errors import ApiError, api_error_handler, integrity_error_handler
 from app.database import engine
-from app.routers import auth, billing, customer_auth, customer_portal, customers, network, organization, payments, plan_activations, plans, platform, radius_sessions, release, users, webhooks
+from app.routers import auth, billing, customer_auth, customer_portal, customers, network, olt, organization, payments, plan_activations, plans, platform, radius_sessions, release, users, webhooks
 
 
 app = FastAPI(
@@ -31,6 +31,8 @@ app.include_router(radius_sessions.router)
 app.include_router(platform.router)
 app.include_router(organization.router)
 app.include_router(network.router)
+app.include_router(olt.organization_router)
+app.include_router(olt.platform_router)
 app.include_router(auth.router)
 app.include_router(customer_auth.router)
 app.include_router(customer_portal.router)
@@ -55,6 +57,8 @@ def readiness() -> dict[str, object]:
         "network_access_servers",
         "expiry_scan_runs", "expiry_disconnect_jobs",
         "auth_token_revocations",
+        "olt_credential_references", "olt_devices", "olt_cards", "olt_uplinks",
+        "olt_pon_ports", "olt_onus", "olt_service_associations", "olt_poll_runs",
     }
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
@@ -79,7 +83,7 @@ def readiness() -> dict[str, object]:
             and os.access(settings.radclient_bin, os.X_OK)
         ),
         "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
-        "migration_status": migration_current == "0013_auth_token_revocations",
+        "migration_status": migration_current == "0014_olt_inventory_foundation",
     }
     ready = all(value for value in checks.values() if isinstance(value, bool))
     return {"status": "ready" if ready else "not_ready", "checks": checks}
