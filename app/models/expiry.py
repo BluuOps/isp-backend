@@ -46,6 +46,42 @@ class ExpiryScanRun(Base):
     last_error = Column(Text)
 
 
+class RadiusRejectOwnership(Base):
+    __tablename__ = "radius_reject_ownerships"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "organization_id"],
+            ["users.id", "users.organization_id"],
+            name="fk_radius_reject_ownership_user_tenant",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "owner = 'radiusfiber_access_policy'",
+            name="ck_radius_reject_ownership_owner",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "user_id",
+            name="uq_radius_reject_ownership_user_tenant",
+        ),
+        UniqueConstraint("radcheck_id", name="uq_radius_reject_ownership_radcheck"),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    organization_id = Column(Integer, nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    radcheck_id = Column(
+        Integer,
+        ForeignKey("radcheck.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    username = Column(String(100), nullable=False)
+    owner = Column(String(64), nullable=False, default="radiusfiber_access_policy")
+    reason_code = Column(String(50), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class ExpiryDisconnectJob(Base):
     __tablename__ = "expiry_disconnect_jobs"
     __table_args__ = (

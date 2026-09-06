@@ -55,7 +55,7 @@ def readiness() -> dict[str, object]:
         "payment_transactions", "customer_portal_accounts",
         "support_tickets", "ticket_messages", "payment_webhook_events",
         "network_access_servers",
-        "expiry_scan_runs", "expiry_disconnect_jobs",
+        "expiry_scan_runs", "expiry_disconnect_jobs", "radius_reject_ownerships",
         "auth_token_revocations",
         "olt_credential_references", "olt_devices", "olt_cards", "olt_uplinks",
         "olt_pon_ports", "olt_onus", "olt_service_associations", "olt_poll_runs",
@@ -83,7 +83,7 @@ def readiness() -> dict[str, object]:
             and os.access(settings.radclient_bin, os.X_OK)
         ),
         "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
-        "migration_status": migration_current == "0014_olt_inventory_foundation",
+        "migration_status": migration_current == "0015_expiry_reject_ownership",
     }
     ready = all(value for value in checks.values() if isinstance(value, bool))
     return {"status": "ready" if ready else "not_ready", "checks": checks}

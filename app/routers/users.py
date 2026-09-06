@@ -16,7 +16,16 @@ from app.core.authorization import (
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.core.errors import conflict
 from app.database import get_db
-from app.models import BillingAccount, Customer, RadCheck, RadReply, ServicePlan, User, Zone
+from app.models import (
+    BillingAccount,
+    Customer,
+    RadCheck,
+    RadReply,
+    RadiusRejectOwnership,
+    ServicePlan,
+    User,
+    Zone,
+)
 from app.schemas import (
     UserActivateResponse,
     UserCreate,
@@ -122,6 +131,10 @@ def sync_radius_username(db: Session, old_username: str, new_username: str) -> N
         row.username = new_username
     for row in db.query(RadReply).filter(RadReply.username == old_username).all():
         row.username = new_username
+    for ownership in db.query(RadiusRejectOwnership).filter(
+        RadiusRejectOwnership.username == old_username
+    ).all():
+        ownership.username = new_username
 
 
 def provision_active_radius(db: Session, user: User, plan: ServicePlan) -> None:

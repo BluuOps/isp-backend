@@ -4,13 +4,14 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models import RadCheck, RadReply, ServicePlan, User
+from app.models import RadCheck, RadReply, RadiusRejectOwnership, ServicePlan, User
 from app.services.expiry_policy import AccessDecision, evaluate_access
 
 
 PASSWORD_ATTRIBUTE = "Cleartext-Password"
 REJECT_ATTRIBUTE = "Auth-Type"
 REJECT_VALUE = "Reject"
+REJECT_OWNER = "radiusfiber_access_policy"
 EXPIRATION_ATTRIBUTE = "Expiration"
 MIKROTIK_RATE_LIMIT_ATTRIBUTE = "Mikrotik-Rate-Limit"
 
@@ -57,8 +58,79 @@ def expiration_radius_value(value: datetime) -> str:
     return utc_value.strftime("%b %d %Y %H:%M:%S UTC")
 
 
-def block_radius_authentication(db: Session, username: str) -> None:
-    upsert_radcheck(db, username, REJECT_ATTRIBUTE, REJECT_VALUE)
+def _owned_reject(db: Session, service: User) -> RadiusRejectOwnership | None:
+    return (
+        db.query(RadiusRejectOwnership)
+        .filter(
+            RadiusRejectOwnership.organization_id == service.organization_id,
+            RadiusRejectOwnership.user_id == service.id,
+        )
+        .with_for_update()
+        .one_or_none()
+    )
+
+
+def _ensure_owned_policy_reject(db: Session, service: User, reason_code: str) -> None:
+    ownership = _owned_reject(db, service)
+    if ownership is not None:
+        row = db.query(RadCheck).filter(RadCheck.id == ownership.radcheck_id).one_or_none()
+        if (
+            row is not None
+            and row.username == ownership.username == service.username
+            and row.attribute == REJECT_ATTRIBUTE
+        ):
+            row.op = ":="
+            row.value = REJECT_VALUE
+            ownership.reason_code = reason_code
+            return
+        db.delete(ownership)
+        db.flush()
+
+    existing_reject = (
+        db.query(RadCheck)
+        .filter(
+            RadCheck.username == service.username,
+            RadCheck.attribute == REJECT_ATTRIBUTE,
+            RadCheck.value == REJECT_VALUE,
+        )
+        .first()
+    )
+    if existing_reject is not None:
+        # A pre-existing reject has unknown/manual ownership. Never claim it.
+        return
+
+    row = RadCheck(
+        username=service.username,
+        attribute=REJECT_ATTRIBUTE,
+        op=":=",
+        value=REJECT_VALUE,
+    )
+    db.add(row)
+    db.flush()
+    db.add(
+        RadiusRejectOwnership(
+            organization_id=service.organization_id,
+            user_id=service.id,
+            radcheck_id=row.id,
+            username=service.username,
+            owner=REJECT_OWNER,
+            reason_code=reason_code,
+        )
+    )
+
+
+def _remove_owned_policy_reject(db: Session, service: User) -> None:
+    ownership = _owned_reject(db, service)
+    if ownership is None:
+        return
+    row = db.query(RadCheck).filter(RadCheck.id == ownership.radcheck_id).one_or_none()
+    if (
+        row is not None
+        and row.username == ownership.username == service.username
+        and row.attribute == REJECT_ATTRIBUTE
+    ):
+        db.delete(row)
+    db.delete(ownership)
 
 
 def delete_radius_provisioning(db: Session, username: str) -> None:
@@ -89,7 +161,9 @@ def synchronize_radius_authorization(
 
     if service.status in {"pending", "terminated"}:
         delete_radius_provisioning(db, service.username)
-        block_radius_authentication(db, service.username)
+        # Materialize cascades before creating the replacement ownership row.
+        db.flush()
+        _ensure_owned_policy_reject(db, service, decision.reason.value)
         return decision
 
     if plan is not None:
@@ -106,7 +180,7 @@ def synchronize_radius_authorization(
         remove_radcheck_attribute(db, service.username, EXPIRATION_ATTRIBUTE)
 
     if decision.eligible:
-        remove_radcheck_attribute(db, service.username, REJECT_ATTRIBUTE)
+        _remove_owned_policy_reject(db, service)
     else:
-        block_radius_authentication(db, service.username)
+        _ensure_owned_policy_reject(db, service, decision.reason.value)
     return decision
