@@ -73,7 +73,9 @@ python -m app.scripts.expiry_worker scan --dry-run \
 
 The ID and username must both match within the selected organization. A mismatch returns zero
 services rather than broadening the selection. Exact-target output always distinguishes `matched`,
-`evaluated`, `changed`, `disconnected`, and `errors`. Exit code `0` requires exactly one matched and
+`evaluated`, `would_change`, `changed`, `disconnected`, and `errors`. A dry run reports prospective
+authorization mutations in `would_change` and always reports `changed=0`; a live scan reports
+authorization mutations performed by the scan in `changed`. Exit code `0` requires exactly one matched and
 evaluated service with no errors. Exit code `2` means an invalid selector, `3` means cardinality
 failure, `4` means an item failed, and `5` means the scan/database operation failed. A safely
 pre-enforced target may report `changed=0` and still succeed. Scanning queues rather than executes

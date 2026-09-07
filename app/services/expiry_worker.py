@@ -49,6 +49,7 @@ class ScanSummary:
     dry_run: bool
     matched: int
     evaluated: int
+    would_change: int
     changed: int
     disconnected: int
     newly_expired: int
@@ -144,7 +145,22 @@ def scan_expired_services(
     lock_skipped = is_dry_run or not acquire_lock
     acquired = False if lock_skipped else _try_worker_lock(db)
     if not lock_skipped and not acquired:
-        return ScanSummary(correlation_id, False, False, is_dry_run, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        return ScanSummary(
+            correlation_id=correlation_id,
+            acquired_lock=False,
+            lock_skipped=False,
+            dry_run=is_dry_run,
+            matched=0,
+            evaluated=0,
+            would_change=0,
+            changed=0,
+            disconnected=0,
+            newly_expired=0,
+            active_sessions=0,
+            jobs_queued=0,
+            errors=0,
+            duration_ms=0,
+        )
 
     scan_run = None
     if not is_dry_run:
@@ -179,7 +195,7 @@ def scan_expired_services(
     rows = query.limit(limit).all()
     matched = len(rows)
 
-    evaluated = changed = newly_expired = active_sessions = jobs_queued = errors = 0
+    evaluated = would_change = changed = newly_expired = active_sessions = jobs_queued = errors = 0
     for service, customer, organization, plan in rows:
         evaluated += 1
         try:
@@ -207,7 +223,10 @@ def scan_expired_services(
                 continue
             newly_expired += 1
             if not previously_enforced:
-                changed += 1
+                if is_dry_run:
+                    would_change += 1
+                else:
+                    changed += 1
             active_session = _latest_fresh_session(db, service.username, test_now=now)
             if not active_session:
                 if not is_dry_run:
@@ -334,6 +353,7 @@ def scan_expired_services(
                 "dry_run": False,
                 "matched": matched,
                 "evaluated": evaluated,
+                "would_change": would_change,
                 "changed": changed,
                 "disconnected": 0,
                 "newly_expired": newly_expired,
@@ -344,8 +364,20 @@ def scan_expired_services(
             },
         )
     return ScanSummary(
-        correlation_id, acquired, lock_skipped, is_dry_run, matched, evaluated,
-        changed, 0, newly_expired, active_sessions, jobs_queued, errors, duration_ms,
+        correlation_id=correlation_id,
+        acquired_lock=acquired,
+        lock_skipped=lock_skipped,
+        dry_run=is_dry_run,
+        matched=matched,
+        evaluated=evaluated,
+        would_change=would_change,
+        changed=changed,
+        disconnected=0,
+        newly_expired=newly_expired,
+        active_sessions=active_sessions,
+        jobs_queued=jobs_queued,
+        errors=errors,
+        duration_ms=duration_ms,
     )
 
 

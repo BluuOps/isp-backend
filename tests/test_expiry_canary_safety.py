@@ -185,6 +185,8 @@ class ExpiryCanaryDatabaseTests(unittest.TestCase):
         self.assertFalse(summary.acquired_lock)
         self.assertTrue(summary.lock_skipped)
         self.assertEqual(summary.newly_expired, 1)
+        self.assertEqual(summary.would_change, 1)
+        self.assertEqual(summary.changed, 0)
         self.assertEqual(summary.jobs_queued, 0)
         self.assertEqual(self._counts(), before)
         self.assertFalse(self.db.new)
@@ -202,6 +204,26 @@ class ExpiryCanaryDatabaseTests(unittest.TestCase):
         )
         self.assertEqual(mismatched.evaluated, 0)
         self.assertEqual(cross_tenant.evaluated, 0)
+
+    def test_exact_dry_run_reports_no_change_when_expiry_reject_is_already_owned(self):
+        service, plan = self._service_and_plan()
+        synchronize_radius_authorization(self.db, service, plan, now=NOW)
+        self.db.commit()
+
+        summary = scan_expired_services(
+            self.db,
+            now=NOW,
+            organization_id=1,
+            user_id=11,
+            username="TEST_ONU",
+            dry_run=True,
+        )
+
+        self.assertEqual(summary.matched, 1)
+        self.assertEqual(summary.evaluated, 1)
+        self.assertEqual(summary.newly_expired, 1)
+        self.assertEqual(summary.would_change, 0)
+        self.assertEqual(summary.changed, 0)
 
     def test_partial_or_unscoped_target_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "both user_id and username"):
@@ -457,7 +479,7 @@ class ExpiryCanaryCliTests(unittest.TestCase):
         context.__exit__.return_value = False
         summary = SimpleNamespace(
             correlation_id="test", acquired_lock=False, lock_skipped=True, dry_run=True,
-            matched=1, evaluated=1, changed=1, disconnected=0, newly_expired=1,
+            matched=1, evaluated=1, would_change=1, changed=0, disconnected=0, newly_expired=1,
             active_sessions=0, jobs_queued=0, errors=0, duration_ms=1,
         )
         with (
@@ -520,7 +542,7 @@ class ExpiryCanaryCliTests(unittest.TestCase):
     def test_cli_exact_target_cardinality_and_error_exit_codes(self):
         base = dict(
             correlation_id="test", acquired_lock=False, lock_skipped=True,
-            dry_run=True, matched=1, evaluated=1, changed=0, disconnected=0,
+            dry_run=True, matched=1, evaluated=1, would_change=1, changed=0, disconnected=0,
             newly_expired=1, active_sessions=0, jobs_queued=0, errors=0, duration_ms=1,
         )
         for matched, evaluated in ((0, 0), (2, 2)):
@@ -537,16 +559,27 @@ class ExpiryCanaryCliTests(unittest.TestCase):
         self.assertEqual(code, expiry_cli.EXIT_SCAN_ERRORS)
         db.rollback.assert_called_once_with()
 
+        summary = SimpleNamespace(**(base | {"changed": 1}))
+        code, db = self._run_cli(summary)
+        self.assertEqual(code, expiry_cli.EXIT_SCAN_ERRORS)
+        db.rollback.assert_called_once_with()
+
     def test_cli_exact_dry_run_and_live_idempotent_success(self):
         base = dict(
             correlation_id="test", acquired_lock=False, lock_skipped=True,
-            dry_run=True, matched=1, evaluated=1, changed=0, disconnected=0,
+            dry_run=True, matched=1, evaluated=1, would_change=1, changed=0, disconnected=0,
             newly_expired=1, active_sessions=0, jobs_queued=0, errors=0, duration_ms=1,
         )
         code, dry_db = self._run_cli(SimpleNamespace(**base))
         self.assertEqual(code, 0)
         dry_db.rollback.assert_called_once_with()
-        live = base | {"acquired_lock": True, "lock_skipped": False, "dry_run": False, "changed": 1}
+        live = base | {
+            "acquired_lock": True,
+            "lock_skipped": False,
+            "dry_run": False,
+            "would_change": 0,
+            "changed": 1,
+        }
         code, live_db = self._run_cli(SimpleNamespace(**live), dry_run=False)
         self.assertEqual(code, 0)
         live_db.commit.assert_called_once_with()
@@ -595,6 +628,8 @@ class ExpiryCanaryPostgresTests(ExpiryCanaryDatabaseTests):
             dry_run=True,
         )
         self.assertEqual(summary.evaluated, 1)
+        self.assertEqual(summary.would_change, 1)
+        self.assertEqual(summary.changed, 0)
         self.assertEqual(self._counts(), before)
         self.db.add(
             ExpiryScanRun(
@@ -617,6 +652,8 @@ class ExpiryCanaryPostgresTests(ExpiryCanaryDatabaseTests):
         self.assertTrue(acquired.acquired_lock)
         self.assertFalse(acquired.lock_skipped)
         self.assertEqual(acquired.errors, 0)
+        self.assertEqual(acquired.would_change, 0)
+        self.assertEqual(acquired.changed, 1)
         self.db.rollback()
 
         service, _ = self._service_and_plan()
