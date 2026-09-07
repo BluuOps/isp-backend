@@ -21,6 +21,8 @@ EXIT_DATABASE_FAILURE = 5
 def _scan_exit_code(summary, *, targeted: bool) -> int:
     if summary.errors:
         return EXIT_SCAN_ERRORS
+    if summary.dry_run and summary.changed != 0:
+        return EXIT_SCAN_ERRORS
     if targeted and (summary.matched != 1 or summary.evaluated != 1):
         return EXIT_TARGET_CARDINALITY
     if targeted and summary.newly_expired != 1:
@@ -32,6 +34,7 @@ def _failure_output(exc: Exception) -> dict[str, object]:
     return {
         "matched": 0,
         "evaluated": 0,
+        "would_change": 0,
         "changed": 0,
         "disconnected": 0,
         "errors": 1,
