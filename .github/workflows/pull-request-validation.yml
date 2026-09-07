@@ -11,8 +11,23 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: validation
+          POSTGRES_PASSWORD: validation-only
+          POSTGRES_DB: radiusfiber_validation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U validation -d radiusfiber_validation"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     env:
-      DATABASE_URL: postgresql://validation:validation@127.0.0.1:9/validation
+      DATABASE_URL: postgresql://validation:validation-only@127.0.0.1:5432/radiusfiber_validation
+      RADIUSFIBER_DISPOSABLE_TEST_DATABASE_URL: postgresql://validation:validation-only@127.0.0.1:5432/radiusfiber_validation
       JWT_SECRET: ci-validation-only
       PAYSTACK_ENABLED: "false"
       DEFAULT_ORGANIZATION_SLUG: smart-fiber
@@ -45,7 +60,7 @@ jobs:
           fi
 
       - name: Compile application and migrations
-        run: python -m compileall -q app alembic
+        run: python -m compileall -q app alembic scripts
 
       - name: Import FastAPI and inspect routes
         run: python -c "from app.main import app; print('IMPORT_OK', len(app.routes))"
@@ -56,11 +71,19 @@ jobs:
           alembic branches
           alembic history
 
+      - name: Rehearse disposable PostgreSQL migration
+        run: python -m scripts.ci_postgresql_validation
+
+      - name: Require PostgreSQL-gated safety tests
+        run: >-
+          python -m scripts.run_tests_no_skips
+          tests.test_expiry_canary_safety.ExpiryCanaryPostgresTests
+
       - name: Run formal tests when present
         shell: bash
         run: |
           if [[ -d tests ]]; then
-            python -m unittest discover -s tests -v
+            python -m scripts.run_tests_no_skips
           else
             echo "::notice::No formal tests directory exists; isolated staging validation is recorded in the pull request."
           fi

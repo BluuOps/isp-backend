@@ -18,8 +18,12 @@ RADIUS synchronization preserves the password and rate policy, writes the standa
 `Expiration` control, and adds `Auth-Type := Reject` whenever policy denies access. Every reject
 created by RadiusFiber is linked to its exact `radcheck` row in `radius_reject_ownerships`, including
 the tenant, service, and denial reason. Renewal removes only that exact owned row when administrative
-state and plan remain eligible. A pre-existing or manually created reject is never claimed or
-removed. Suspended and terminated services are never resumed by renewal.
+state and plan remain eligible. Manual session disconnects use the distinct reason
+`MANUAL_DISCONNECT`; manual and policy reasons may coexist without being overwritten. Reconnect
+removes only its owned manual/suspension reasons. If an expiry or unknown reject remains, the API
+returns `409` and does not claim that authentication was restored. A pre-existing or manually
+created reject is never claimed or removed. Suspended and terminated services are never resumed
+by renewal.
 
 The current production FreeRADIUS configuration does not enable the `expiration` module.
 Consequently, production rollout must include a separately reviewed FreeRADIUS policy canary;
@@ -68,7 +72,34 @@ python -m app.scripts.expiry_worker scan --dry-run \
 ```
 
 The ID and username must both match within the selected organization. A mismatch returns zero
-services rather than broadening the selection.
+services rather than broadening the selection. Exact-target output always distinguishes `matched`,
+`evaluated`, `changed`, `disconnected`, and `errors`. Exit code `0` requires exactly one matched and
+evaluated service with no errors. Exit code `2` means an invalid selector, `3` means cardinality
+failure, `4` means an item failed, and `5` means the scan/database operation failed. A safely
+pre-enforced target may report `changed=0` and still succeed. Scanning queues rather than executes
+disconnects, so `disconnected` is always `0` in scan output.
+
+Dry scans report `acquired_lock=false` and `lock_skipped=true`; live scans retain advisory-lock
+enforcement.
+
+## Legacy reject reconciliation
+
+An unowned effective reject is fail-closed and blocks normal lifecycle reconciliation. Produce an
+exact-row, read-only report first:
+
+```bash
+python -m app.scripts.reject_reconciliation \
+  --organization-id ORGANIZATION_ID \
+  --user-id USER_ID \
+  --username USERNAME \
+  --radcheck-id RADCHECK_ID
+```
+
+Only after independently verifying auditable evidence, one identified row can be adopted or
+removed by adding `--action adopt` (or `remove`), `--apply`, an exactly matching
+`--confirm-radcheck-id`, `--evidence-reference`, and `--operator-id`. The command has no bulk mode;
+every applied action writes a sanitized audit event. Unknown or administrator-created rejects must
+not be adopted or removed.
 
 Safe metrics:
 

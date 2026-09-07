@@ -41,7 +41,8 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "organization_id",
             "user_id",
-            name="uq_radius_reject_ownership_user_tenant",
+            "reason_code",
+            name="uq_radius_reject_ownership_user_tenant_reason",
         ),
         sa.UniqueConstraint("radcheck_id", name="uq_radius_reject_ownership_radcheck"),
     )

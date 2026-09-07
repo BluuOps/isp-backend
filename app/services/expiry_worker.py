@@ -31,7 +31,7 @@ from app.services.disconnect_adapter import (
     DisconnectResult,
 )
 from app.services.expiry_policy import AccessReason, aware_utc, require_aware_utc
-from app.services.radius_authorization import synchronize_radius_authorization
+from app.services.radius_authorization import owned_reject_reasons, synchronize_radius_authorization
 from app.services.radius_session_freshness import fresh_active_session_conditions
 
 
@@ -45,8 +45,12 @@ FINAL_STATUSES = ("succeeded", "terminal_failure", "cancelled", "stale")
 class ScanSummary:
     correlation_id: str
     acquired_lock: bool
+    lock_skipped: bool
     dry_run: bool
+    matched: int
     evaluated: int
+    changed: int
+    disconnected: int
     newly_expired: int
     active_sessions: int
     jobs_queued: int
@@ -137,9 +141,10 @@ def scan_expired_services(
     limit = max(1, min(1000, batch_size or settings.expiry_scan_batch_size))
     is_dry_run = settings.expiry_worker_dry_run if dry_run is None else dry_run
     correlation_id = uuid.uuid4().hex
-    acquired = not acquire_lock or is_dry_run or _try_worker_lock(db)
-    if not acquired:
-        return ScanSummary(correlation_id, False, is_dry_run, 0, 0, 0, 0, 0, 0)
+    lock_skipped = is_dry_run or not acquire_lock
+    acquired = False if lock_skipped else _try_worker_lock(db)
+    if not lock_skipped and not acquired:
+        return ScanSummary(correlation_id, False, False, is_dry_run, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
     scan_run = None
     if not is_dry_run:
@@ -171,12 +176,14 @@ def scan_expired_services(
         query = query.filter(User.organization_id == organization_id)
     if user_id is not None and username is not None:
         query = query.filter(User.id == user_id, User.username == username)
-    query = query.limit(limit)
+    rows = query.limit(limit).all()
+    matched = len(rows)
 
-    evaluated = newly_expired = active_sessions = jobs_queued = errors = 0
-    for service, customer, organization, plan in query.all():
+    evaluated = changed = newly_expired = active_sessions = jobs_queued = errors = 0
+    for service, customer, organization, plan in rows:
         evaluated += 1
         try:
+            previously_enforced = AccessReason.EXPIRED.value in owned_reject_reasons(db, service)
             if not is_dry_run:
                 decision = synchronize_radius_authorization(
                     db,
@@ -199,6 +206,8 @@ def scan_expired_services(
             if decision.reason != AccessReason.EXPIRED:
                 continue
             newly_expired += 1
+            if not previously_enforced:
+                changed += 1
             active_session = _latest_fresh_session(db, service.username, test_now=now)
             if not active_session:
                 if not is_dry_run:
@@ -323,7 +332,10 @@ def scan_expired_services(
             new_value={
                 "correlation_id": correlation_id,
                 "dry_run": False,
+                "matched": matched,
                 "evaluated": evaluated,
+                "changed": changed,
+                "disconnected": 0,
                 "newly_expired": newly_expired,
                 "active_sessions": active_sessions,
                 "jobs_queued": jobs_queued,
@@ -332,8 +344,8 @@ def scan_expired_services(
             },
         )
     return ScanSummary(
-        correlation_id, True, is_dry_run, evaluated, newly_expired,
-        active_sessions, jobs_queued, errors, duration_ms,
+        correlation_id, acquired, lock_skipped, is_dry_run, matched, evaluated,
+        changed, 0, newly_expired, active_sessions, jobs_queued, errors, duration_ms,
     )
 
 

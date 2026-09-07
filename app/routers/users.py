@@ -39,7 +39,13 @@ from app.schemas import (
     UserUpdate,
 )
 from app.services.audit import record_audit
-from app.services.radius_authorization import synchronize_radius_authorization
+from app.services.radius_authorization import (
+    MANUAL_DISCONNECT_REASON,
+    RejectOwnershipConflict,
+    effective_reject_ids,
+    remove_owned_rejects,
+    synchronize_radius_authorization,
+)
 
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -482,10 +488,17 @@ def activate_user(user_id: int, db: Session = Depends(get_db), organization: Org
     user = get_user_or_404(user_id, db, organization.id)
     plan = get_active_plan_or_400(user.service_plan, db, organization.id)
 
+    blocking_reject_ids: tuple[int, ...] = ()
     try:
         old_status = user.status
         user.status = STATUS_ACTIVE
+        remove_owned_rejects(
+            db,
+            user,
+            reason_codes={MANUAL_DISCONNECT_REASON, "SUSPENDED"},
+        )
         apply_radius_lifecycle(db, user, plan)
+        blocking_reject_ids = effective_reject_ids(db, user)
         record_audit(
             db,
             organization_id=organization.id,
@@ -494,12 +507,46 @@ def activate_user(user_id: int, db: Session = Depends(get_db), organization: Org
             target_type="user",
             target_id=str(user.id),
             old_value={"status": old_status},
-            new_value={"status": user.status},
+            new_value={
+                "status": user.status,
+                "authentication_restored": not blocking_reject_ids,
+                "remaining_reject_ids": list(blocking_reject_ids),
+            },
+            success=not blocking_reject_ids,
         )
         db.commit()
+    except RejectOwnershipConflict as exc:
+        db.rollback()
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.reconnect_ownership_conflict",
+            target_type="user",
+            target_id=str(user.id),
+            new_value={"radcheck_ids": list(exc.radcheck_ids)},
+            success=False,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "radius_reject_ownership_conflict",
+                "message": "Authentication remains blocked pending explicit RADIUS reject reconciliation.",
+            },
+        ) from exc
     except Exception:
         db.rollback()
         raise
+
+    if blocking_reject_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "radius_authentication_still_blocked",
+                "message": "The authorized lifecycle restriction was cleared, but another effective RADIUS reject remains.",
+            },
+        )
 
     return UserActivateResponse(
         id=user.id,

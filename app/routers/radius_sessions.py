@@ -10,13 +10,19 @@ from app.core.authorization import Permission, require_permission
 from app.core.config import settings
 from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
-from app.models import NetworkAccessServer, RadAcct, RadCheck, User, Zone
+from app.models import NetworkAccessServer, RadAcct, User, Zone
 from app.schemas.radius_session import (
     RadiusDisconnectRequest,
     RadiusDisconnectResponse,
     RadiusSessionResponse,
 )
 from app.services.audit import record_audit
+from app.services.radius_authorization import (
+    MANUAL_DISCONNECT_REASON,
+    RejectOwnershipConflict,
+    ensure_owned_reject,
+    owned_reject_reasons,
+)
 from app.services.radius_session_freshness import fresh_active_session_conditions
 
 logger = logging.getLogger(__name__)
@@ -26,9 +32,6 @@ COA_SECRET_FILE = settings.coa_secret_path
 COA_NAS_IP = settings.coa_nas_ip
 COA_PORT = settings.coa_port
 PILOT_CALLED_STATION_ID = settings.pilot_calledstationid
-
-REJECT_ATTRIBUTE = "Auth-Type"
-REJECT_VALUE = "Reject"
 
 router = APIRouter(prefix="/radius", tags=["RADIUS Sessions"])
 
@@ -114,7 +117,31 @@ def disconnect_session(
             detail="PPPoE account was not found",
         )
 
-    if account.status != "active":
+    try:
+        manual_disconnect_owned = MANUAL_DISCONNECT_REASON in owned_reject_reasons(db, account)
+    except RejectOwnershipConflict as exc:
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.disconnect_ownership_conflict",
+            target_type="user",
+            target_id=str(account.id),
+            new_value={"radcheck_ids": list(exc.radcheck_ids)},
+            success=False,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "radius_reject_ownership_conflict",
+                "message": "An existing RADIUS reject requires explicit ownership reconciliation.",
+            },
+        ) from exc
+
+    if account.status != "active" and not (
+        account.status == "suspended" and manual_disconnect_owned
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="PPPoE account is already disconnected or inactive",
@@ -164,31 +191,30 @@ def disconnect_session(
                 detail="RADIUS disconnect service is not configured",
             )
 
-    reject = (
-        db.query(RadCheck)
-        .filter(
-            RadCheck.username == account.username,
-            RadCheck.attribute == REJECT_ATTRIBUTE,
-        )
-        .first()
-    )
-    if reject:
-        reject.op = ":="
-        reject.value = REJECT_VALUE
-    else:
-        db.add(
-            RadCheck(
-                username=account.username,
-                attribute=REJECT_ATTRIBUTE,
-                op=":=",
-                value=REJECT_VALUE,
-            )
-        )
-
-    account.status = "suspended"
-
     try:
+        ensure_owned_reject(db, account, MANUAL_DISCONNECT_REASON)
+        account.status = "suspended"
         db.commit()
+    except RejectOwnershipConflict as exc:
+        db.rollback()
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.disconnect_ownership_conflict",
+            target_type="user",
+            target_id=str(account.id),
+            new_value={"radcheck_ids": list(exc.radcheck_ids)},
+            success=False,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "radius_reject_ownership_conflict",
+                "message": "An existing RADIUS reject requires explicit ownership reconciliation.",
+            },
+        ) from exc
     except Exception:
         db.rollback()
         raise

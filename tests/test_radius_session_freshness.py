@@ -24,6 +24,8 @@ from app.models import (
     Organization,
     Platform,
     RadAcct,
+    RadCheck,
+    RadiusRejectOwnership,
     ServicePlan,
     Subscription,
     User,
@@ -186,8 +188,10 @@ class FreshnessConsumerDatabaseTests(unittest.TestCase):
                 Zone.__table__,
                 NetworkAccessServer.__table__,
                 RadAcct.__table__,
+                RadCheck.__table__,
                 ExpiryScanRun.__table__,
                 ExpiryDisconnectJob.__table__,
+                RadiusRejectOwnership.__table__,
             ],
         )
         cls.Session = sessionmaker(bind=cls.engine, future=True)
@@ -209,8 +213,10 @@ class FreshnessConsumerDatabaseTests(unittest.TestCase):
                 Zone.__table__,
                 NetworkAccessServer.__table__,
                 RadAcct.__table__,
+                RadCheck.__table__,
                 ExpiryScanRun.__table__,
                 ExpiryDisconnectJob.__table__,
+                RadiusRejectOwnership.__table__,
             ]
         ):
             self.db.execute(table.delete())
