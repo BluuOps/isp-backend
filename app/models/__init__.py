@@ -4,7 +4,7 @@ from app.models.billing import BillingAccount
 from app.models.customer import Customer
 from app.models.customer_portal_account import CustomerPortalAccount
 from app.models.feature_flag import FeatureFlag
-from app.models.expiry import ExpiryDisconnectJob, ExpiryScanRun
+from app.models.expiry import ExpiryDisconnectJob, ExpiryScanRun, RadiusRejectOwnership
 from app.models.notification_setting import NotificationSetting
 from app.models.olt_association import OltServiceAssociation
 from app.models.olt_device import OltCredentialReference, OltDevice
@@ -36,6 +36,7 @@ __all__ = [
     "FeatureFlag",
     "ExpiryDisconnectJob",
     "ExpiryScanRun",
+    "RadiusRejectOwnership",
     "Organization",
     "OrganizationBillingProfile",
     "OrganizationRole",
