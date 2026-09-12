@@ -4,12 +4,14 @@ import os
 import threading
 import unittest
 import time
+import uuid
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import ValidationError
 from sqlalchemy import create_engine, inspect, text
@@ -571,33 +573,73 @@ POSTGRES_URL = os.getenv("RADIUSFIBER_DISPOSABLE_TEST_DATABASE_URL")
 
 @unittest.skipUnless(POSTGRES_URL, "disposable PostgreSQL URL is not configured")
 class StagingUatFixturePostgresTests(unittest.TestCase):
+    LOCK_KEY = 160016
+
     @classmethod
     def setUpClass(cls):
         cls.engine = create_engine(POSTGRES_URL, future=True)
         cls.Session = sessionmaker(bind=cls.engine, future=True)
-        with cls.Session() as db:
-            organization = db.query(Organization).filter_by(slug="smart-fiber").one_or_none()
-            if organization is None:
-                platform = Platform(name="UAT fixture concurrency validation")
-                db.add(platform)
-                db.flush()
-                organization = Organization(
-                    platform_id=platform.id,
-                    name="Smart Fiber",
-                    slug="smart-fiber",
-                    status="active",
+        cls.lock_connection = cls.engine.connect()
+        cls.lock_connection.execute(
+            text("SELECT pg_advisory_lock(:lock_key)"), {"lock_key": cls.LOCK_KEY}
+        )
+        cls.created_platform_id = None
+        cls.created_organization_id = None
+        cls.all_correlation_ids: set[str] = set()
+        cls.all_fixture_ids: set[str] = set()
+        cls.all_staff_ids: set[int] = set()
+        try:
+            with cls.Session.begin() as db:
+                platform = db.query(Platform).order_by(Platform.id).first()
+                if platform is None:
+                    platform_id = db.execute(
+                        text("SELECT COALESCE(MAX(id), 0) + 1 FROM platform")
+                    ).scalar_one()
+                    platform = Platform(
+                        id=platform_id,
+                        name="UAT fixture concurrency validation",
+                    )
+                    db.add(platform)
+                    db.flush()
+                    cls.created_platform_id = platform.id
+
+                organization = (
+                    db.query(Organization)
+                    .filter_by(slug="smart-fiber")
+                    .order_by(Organization.id)
+                    .one_or_none()
                 )
-                db.add(organization)
-                db.flush()
-                cls.created_platform_id = platform.id
-            else:
-                cls.created_platform_id = None
-                organization.status = "active"
-            cls.organization_id = organization.id
-            db.query(OrganizationStaff).filter_by(
-                organization_id=organization.id, is_uat_fixture=True
-            ).delete(synchronize_session=False)
-            db.commit()
+                if organization is not None and organization.status != "active":
+                    raise RuntimeError(
+                        "Existing smart-fiber organization is unsuitable for UAT fixture tests"
+                    )
+                if organization is None:
+                    organization_id = db.execute(
+                        text("SELECT COALESCE(MAX(id), 0) + 1 FROM organizations")
+                    ).scalar_one()
+                    organization = Organization(
+                        id=organization_id,
+                        platform_id=platform.id,
+                        name="Smart Fiber",
+                        slug="smart-fiber",
+                        status="active",
+                    )
+                    db.add(organization)
+                    db.flush()
+                    cls.created_organization_id = organization.id
+                cls.organization_id = organization.id
+
+                existing_fixture_count = db.query(OrganizationStaff).filter_by(
+                    organization_id=organization.id,
+                    is_uat_fixture=True,
+                ).count()
+                if existing_fixture_count:
+                    raise RuntimeError(
+                        "Pre-existing Smart Fiber UAT fixture prevents isolated PostgreSQL tests"
+                    )
+        except Exception:
+            cls._release_lock_and_engine()
+            raise
         cls.principal = AuthenticatedPrincipal(
             subject_id="platform-admin",
             principal_type=PrincipalType.PLATFORM_ADMIN,
@@ -618,39 +660,147 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        with cls.Session() as db:
-            db.query(AuditLog).filter_by(organization_id=cls.organization_id).delete(
-                synchronize_session=False
-            )
-            db.query(OrganizationStaff).filter_by(organization_id=cls.organization_id).delete(
-                synchronize_session=False
-            )
-            if cls.created_platform_id is not None:
-                db.query(Organization).filter_by(id=cls.organization_id).delete(
-                    synchronize_session=False
+        try:
+            with cls.Session.begin() as db:
+                if cls.all_correlation_ids:
+                    audit_ids = list(
+                        db.execute(
+                            text(
+                                "SELECT id FROM audit_logs "
+                                "WHERE organization_id = :organization_id "
+                                "AND new_value ->> 'correlation_id' = ANY(:correlation_ids)"
+                            ),
+                            {
+                                "organization_id": cls.organization_id,
+                                "correlation_ids": list(cls.all_correlation_ids),
+                            },
+                        ).scalars()
+                    )
+                    if audit_ids:
+                        db.query(AuditLog).filter(AuditLog.id.in_(audit_ids)).delete(
+                            synchronize_session=False
+                        )
+                if cls.all_fixture_ids:
+                    db.query(OrganizationStaff).filter(
+                        OrganizationStaff.organization_id == cls.organization_id,
+                        OrganizationStaff.uat_fixture_id.in_(cls.all_fixture_ids),
+                    ).delete(synchronize_session=False)
+                if cls.all_staff_ids:
+                    db.query(OrganizationStaff).filter(
+                        OrganizationStaff.organization_id == cls.organization_id,
+                        OrganizationStaff.id.in_(cls.all_staff_ids),
+                    ).delete(synchronize_session=False)
+                if cls.created_organization_id is not None:
+                    db.query(Organization).filter_by(
+                        id=cls.created_organization_id,
+                        slug="smart-fiber",
+                    ).delete(synchronize_session=False)
+                if cls.created_platform_id is not None:
+                    db.query(Platform).filter_by(id=cls.created_platform_id).delete(
+                        synchronize_session=False
+                    )
+        finally:
+            cls._release_lock_and_engine()
+
+    @classmethod
+    def _release_lock_and_engine(cls):
+        connection = getattr(cls, "lock_connection", None)
+        if connection is not None:
+            try:
+                connection.execute(
+                    text("SELECT pg_advisory_unlock(:lock_key)"),
+                    {"lock_key": cls.LOCK_KEY},
                 )
-                db.query(Platform).filter_by(id=cls.created_platform_id).delete(
-                    synchronize_session=False
-                )
-            db.commit()
+            finally:
+                connection.close()
+                cls.lock_connection = None
         cls.engine.dispose()
 
     def setUp(self):
+        self.correlation_ids: set[str] = set()
+        self.fixture_ids: set[str] = set()
+        self.staff_ids: set[int] = set()
         with self.Session() as db:
-            db.query(AuditLog).filter_by(organization_id=self.organization_id).delete(
-                synchronize_session=False
-            )
-            db.query(OrganizationStaff).filter_by(
-                organization_id=self.organization_id, is_uat_fixture=True
-            ).delete(synchronize_session=False)
-            db.commit()
+            self.protected_before = self._protected_counts(db)
+            self.ordinary_staff_before = self._ordinary_staff_snapshot(db)
+
+    def tearDown(self):
+        config = Config("alembic.ini")
+        with self.engine.connect() as connection:
+            revision = connection.scalar(text("SELECT version_num FROM alembic_version"))
+        if revision != "0016_staging_uat_fixtures":
+            command.upgrade(config, "0016_staging_uat_fixtures")
+
+        with self.Session.begin() as db:
+            audit_ids = []
+            if self.correlation_ids:
+                audit_ids = list(
+                    db.execute(
+                        text(
+                            "SELECT id FROM audit_logs "
+                            "WHERE organization_id = :organization_id "
+                            "AND new_value ->> 'correlation_id' = ANY(:correlation_ids)"
+                        ),
+                        {
+                            "organization_id": self.organization_id,
+                            "correlation_ids": list(self.correlation_ids),
+                        },
+                    ).scalars()
+                )
+            if audit_ids:
+                db.query(AuditLog).filter(AuditLog.id.in_(audit_ids)).delete(
+                    synchronize_session=False
+                )
+            if self.fixture_ids:
+                db.query(OrganizationStaff).filter(
+                    OrganizationStaff.organization_id == self.organization_id,
+                    OrganizationStaff.uat_fixture_id.in_(self.fixture_ids),
+                ).delete(synchronize_session=False)
+            if self.staff_ids:
+                db.query(OrganizationStaff).filter(
+                    OrganizationStaff.organization_id == self.organization_id,
+                    OrganizationStaff.id.in_(self.staff_ids),
+                ).delete(synchronize_session=False)
+
+        with self.Session() as db:
+            self.assertEqual(self._protected_counts(db), self.protected_before)
+            self.assertEqual(self._ordinary_staff_snapshot(db), self.ordinary_staff_before)
+
+    @staticmethod
+    def _protected_counts(db):
+        return tuple(
+            db.execute(text(f"SELECT count(*) FROM {table_name}")).scalar_one()
+            for table_name in ("customers", "billing_accounts", "radcheck")
+        )
+
+    def _ordinary_staff_snapshot(self, db):
+        return tuple(
+            db.execute(
+                text(
+                    "SELECT id, organization_id, email, role, status, password_hash "
+                    "FROM organization_staff WHERE organization_id = :organization_id "
+                    "AND NOT is_uat_fixture ORDER BY id"
+                ),
+                {"organization_id": self.organization_id},
+            ).all()
+        )
+
+    def _correlation_id(self, purpose: str) -> str:
+        correlation_id = f"pr16-{purpose}-{uuid.uuid4().hex}"
+        self.correlation_ids.add(correlation_id)
+        self.all_correlation_ids.add(correlation_id)
+        return correlation_id
 
     def test_concurrent_creation_serializes_on_target_organization(self):
         barrier = threading.Barrier(2)
         outcomes: list[object] = []
         outcome_lock = threading.Lock()
+        correlations = [
+            self._correlation_id("concurrent-a"),
+            self._correlation_id("concurrent-b"),
+        ]
 
-        def create() -> None:
+        def create(correlation_id: str) -> None:
             with self.Session() as db:
                 barrier.wait()
                 try:
@@ -658,24 +808,36 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
                         db,
                         ttl_minutes=60,
                         principal=self.principal,
-                        correlation_id="concurrency-validation",
+                        correlation_id=correlation_id,
                     )
+                    created_staff_id = db.query(OrganizationStaff.id).filter_by(
+                        uat_fixture_id=created.fixture_id
+                    ).scalar()
                     db.commit()
-                    outcome: object = created.fixture_id
+                    outcome: object = (created.fixture_id, created_staff_id)
                 except HTTPException as exc:
                     db.rollback()
                     outcome = exc.status_code
                 with outcome_lock:
                     outcomes.append(outcome)
+                    if isinstance(outcome, tuple):
+                        fixture_id, staff_id = outcome
+                        self.fixture_ids.add(fixture_id)
+                        self.all_fixture_ids.add(fixture_id)
+                        self.staff_ids.add(staff_id)
+                        self.all_staff_ids.add(staff_id)
 
-        threads = [threading.Thread(target=create) for _ in range(2)]
+        threads = [
+            threading.Thread(target=create, args=(correlation_id,))
+            for correlation_id in correlations
+        ]
         with patch.object(fixtures, "settings", self.enabled_settings):
             for thread in threads:
                 thread.start()
             for thread in threads:
                 thread.join(timeout=15)
         self.assertTrue(all(not thread.is_alive() for thread in threads))
-        self.assertEqual(len([item for item in outcomes if isinstance(item, str)]), 1)
+        self.assertEqual(len([item for item in outcomes if isinstance(item, tuple)]), 1)
         self.assertEqual(outcomes.count(409), 1)
         with self.Session() as db:
             count = db.query(OrganizationStaff).filter(
@@ -697,15 +859,26 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
                 is_uat_fixture=False,
             )
             db.add(ordinary)
+            db.flush()
+            self.staff_ids.add(ordinary.id)
+            self.all_staff_ids.add(ordinary.id)
+            create_correlation_id = self._correlation_id("downgrade-create")
             with patch.object(fixtures, "settings", self.enabled_settings):
                 created = fixtures.create_read_only_fixture(
                     db,
                     ttl_minutes=60,
                     principal=self.principal,
-                    correlation_id="downgrade-refusal",
+                    correlation_id=create_correlation_id,
                 )
             db.commit()
             ordinary_id = ordinary.id
+            self.fixture_ids.add(created.fixture_id)
+            self.all_fixture_ids.add(created.fixture_id)
+            fixture_staff_id = db.query(OrganizationStaff.id).filter_by(
+                uat_fixture_id=created.fixture_id
+            ).scalar()
+            self.staff_ids.add(fixture_staff_id)
+            self.all_staff_ids.add(fixture_staff_id)
 
         config = Config("alembic.ini")
         with self.assertRaisesRegex(RuntimeError, "UAT fixture rows remain"):
@@ -715,6 +888,16 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
                 connection.scalar(text("SELECT version_num FROM alembic_version")),
                 "0016_staging_uat_fixtures",
             )
+            fixture_metadata = connection.execute(
+                text(
+                    "SELECT is_uat_fixture, uat_fixture_id, uat_expires_at "
+                    "FROM organization_staff WHERE uat_fixture_id = :fixture_id"
+                ),
+                {"fixture_id": created.fixture_id},
+            ).one()
+            self.assertTrue(fixture_metadata.is_uat_fixture)
+            self.assertEqual(fixture_metadata.uat_fixture_id, created.fixture_id)
+            self.assertIsNotNone(fixture_metadata.uat_expires_at)
             self.assertEqual(
                 connection.scalar(
                     text("SELECT status FROM organization_staff WHERE id = :id"),
@@ -724,14 +907,16 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
             )
 
         with self.Session() as db:
+            cleanup_correlation_id = self._correlation_id("downgrade-cleanup")
             with patch.object(fixtures, "settings", self.enabled_settings):
                 fixtures.cleanup_read_only_fixture(
                     db,
                     fixture_id=created.fixture_id,
                     principal=self.principal,
-                    correlation_id="downgrade-cleanup",
+                    correlation_id=cleanup_correlation_id,
                 )
             db.commit()
+        self.fixture_ids.discard(created.fixture_id)
         command.downgrade(config, "0015_expiry_reject_ownership")
         with self.engine.connect() as connection:
             self.assertNotIn(
@@ -757,9 +942,15 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
                 1,
             )
         command.upgrade(config, "0016_staging_uat_fixtures")
-        with self.Session() as db:
-            db.query(OrganizationStaff).filter_by(id=ordinary_id).delete(synchronize_session=False)
-            db.commit()
+        self.assertEqual(
+            ScriptDirectory.from_config(config).get_heads(),
+            ["0016_staging_uat_fixtures"],
+        )
+        with self.engine.connect() as connection:
+            self.assertEqual(
+                connection.scalar(text("SELECT version_num FROM alembic_version")),
+                "0016_staging_uat_fixtures",
+            )
 
 
 if __name__ == "__main__":
