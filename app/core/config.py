@@ -17,6 +17,10 @@ def required_environment(name: str) -> str:
 @dataclass(frozen=True)
 class Settings:
     database_url: str = required_environment("DATABASE_URL")
+    deployment_environment: str = os.getenv("RADIUSFIBER_ENVIRONMENT", "production").strip().lower()
+    staging_uat_fixtures_enabled: bool = os.getenv(
+        "STAGING_UAT_FIXTURES_ENABLED", "false"
+    ).lower() in {"1", "true", "yes", "on"}
     default_organization_slug: str = os.getenv("DEFAULT_ORGANIZATION_SLUG", "smart-fiber")
     radclient_bin: str = os.getenv("RADIUS_RADCLIENT_BIN", "/usr/bin/radclient")
     coa_secret_path: str = os.getenv(
@@ -155,6 +159,13 @@ class Settings:
     webhook_max_payload_bytes: int = int(os.getenv("WEBHOOK_MAX_PAYLOAD_BYTES", "262144"))
     webhook_max_processing_attempts: int = int(os.getenv("WEBHOOK_MAX_PROCESSING_ATTEMPTS", "5"))
 
+    def validate_staging_uat_fixture_configuration(self) -> None:
+        if self.staging_uat_fixtures_enabled and self.deployment_environment != "staging":
+            raise RuntimeError(
+                "STAGING_UAT_FIXTURES_ENABLED may only be enabled when "
+                "RADIUSFIBER_ENVIRONMENT=staging"
+            )
+
     def require_paystack(self) -> None:
         if not self.paystack_enabled:
             return
@@ -172,3 +183,4 @@ class Settings:
 
 
 settings = Settings()
+settings.validate_staging_uat_fixture_configuration()

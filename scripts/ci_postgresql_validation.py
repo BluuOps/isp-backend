@@ -1,4 +1,4 @@
-"""Build and validate an ephemeral CI-only 0014/0015 PostgreSQL migration chain."""
+"""Validate the ephemeral CI-only 0015/0016 PostgreSQL migration chain."""
 
 from __future__ import annotations
 
@@ -11,9 +11,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import make_url
 
 
-BASE_REVISION = "0014_olt_inventory_foundation"
-HEAD_REVISION = "0015_expiry_reject_ownership"
-OWNERSHIP_TABLE = "radius_reject_ownerships"
+BASE_REVISION = "0015_expiry_reject_ownership"
+HEAD_REVISION = "0016_staging_uat_fixtures"
 
 
 def _validated_disposable_url() -> str:
@@ -44,17 +43,15 @@ def main() -> None:
         )
 
     engine = create_engine(database_url, future=True)
-    baseline_tables = [
-        table for table in Base.metadata.sorted_tables if table.name != OWNERSHIP_TABLE
-    ]
     Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine, tables=baseline_tables)
+    Base.metadata.create_all(engine)
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     if heads != [HEAD_REVISION]:
         raise RuntimeError(f"expected one Alembic head {HEAD_REVISION}, got {heads}")
-    command.stamp(config, BASE_REVISION)
+    command.stamp(config, HEAD_REVISION)
+    command.downgrade(config, BASE_REVISION)
     with engine.connect() as connection:
         protected_before = protected_counts(connection)
     command.upgrade(config, HEAD_REVISION)
@@ -65,7 +62,7 @@ def main() -> None:
         protected_after = protected_counts(connection)
     if protected_after != protected_before:
         raise RuntimeError("protected customer, billing, or RADIUS data changed")
-    print("MIGRATION_REHEARSAL=0014_to_0015_to_0014_to_0015_passed")
+    print("MIGRATION_REHEARSAL=0015_to_0016_to_0015_to_0016_passed")
     print("ALEMBIC_HEADS=single")
     print("ALEMBIC_CHECK=clean")
     print("PROTECTED_DATA=unchanged")

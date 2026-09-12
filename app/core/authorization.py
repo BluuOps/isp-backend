@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Callable, TypeVar
 
 from fastapi import Depends, Header, HTTPException
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from app.core.config import settings
@@ -385,6 +386,11 @@ def get_authenticated_principal(
         .filter(
             OrganizationStaff.id == staff_id,
             OrganizationStaff.organization_id == organization_id,
+            OrganizationStaff.status == "active",
+            or_(
+                OrganizationStaff.is_uat_fixture.is_(False),
+                OrganizationStaff.uat_expires_at > func.current_timestamp(),
+            ),
         )
         .first()
     )
@@ -398,8 +404,6 @@ def get_authenticated_principal(
     )
     if not staff or str(payload["sub"]) != f"staff:{staff.id}":
         raise HTTPException(status_code=401, detail="Identity is no longer available")
-    if staff.status != "active":
-        raise HTTPException(status_code=401, detail="Identity is disabled")
     if not organization or organization.status != "active":
         raise HTTPException(
             status_code=403,
