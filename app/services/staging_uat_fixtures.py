@@ -36,11 +36,11 @@ class CreatedFixture:
 
 
 def require_staging_fixture_capability() -> None:
-    if settings.deployment_environment != "staging":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if not settings.staging_uat_fixtures_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if make_url(settings.database_url).database != STAGING_DATABASE_NAME:
+    if not (
+        settings.deployment_environment == "staging"
+        and settings.staging_uat_fixtures_enabled
+        and make_url(settings.database_url).database == STAGING_DATABASE_NAME
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
@@ -53,12 +53,15 @@ def _database_now(db: Session) -> datetime:
     return db.execute(select(func.current_timestamp())).scalar_one()
 
 
-def _target_organization(db: Session) -> Organization:
+def _target_organization(db: Session, *, for_update: bool = False) -> Organization:
+    statement = select(Organization).where(
+        Organization.slug == TARGET_ORGANIZATION_SLUG,
+        Organization.status == "active",
+    )
+    if for_update:
+        statement = statement.with_for_update()
     organization = db.execute(
-        select(Organization).where(
-            Organization.slug == TARGET_ORGANIZATION_SLUG,
-            Organization.status == "active",
-        )
+        statement
     ).scalar_one_or_none()
     if not organization:
         raise HTTPException(
@@ -79,7 +82,9 @@ def create_read_only_fixture(
     _require_platform_authority(principal)
     if not MIN_TTL_MINUTES <= ttl_minutes <= MAX_TTL_MINUTES:
         raise HTTPException(status_code=422, detail="Invalid fixture lifetime")
-    organization = _target_organization(db)
+    # The exact target organization row serializes the check-and-create section.
+    # On PostgreSQL, a second creator waits and then observes the first commit.
+    organization = _target_organization(db, for_update=True)
     now = _database_now(db)
     existing = db.execute(
         select(OrganizationStaff.id).where(

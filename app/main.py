@@ -38,7 +38,17 @@ app.include_router(customer_auth.router)
 app.include_router(customer_portal.router)
 app.include_router(webhooks.router)
 app.include_router(release.router)
-app.include_router(staging_uat.router)
+
+
+def register_staging_uat_routes(application: FastAPI, configuration=settings) -> bool:
+    configuration.validate_staging_uat_fixture_configuration()
+    if not configuration.staging_uat_fixture_routes_enabled():
+        return False
+    application.include_router(staging_uat.router)
+    return True
+
+
+register_staging_uat_routes(app)
 
 
 @app.get("/health")

@@ -37,6 +37,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    connection = op.get_bind()
+    if connection.dialect.name == "postgresql":
+        connection.execute(sa.text("LOCK TABLE organization_staff IN ACCESS EXCLUSIVE MODE"))
+    fixture_exists = connection.execute(
+        sa.text("SELECT EXISTS (SELECT 1 FROM organization_staff WHERE is_uat_fixture)")
+    ).scalar_one()
+    if fixture_exists:
+        raise RuntimeError(
+            "Cannot downgrade 0016 while UAT fixture rows remain; "
+            "revoke and clean every fixture first"
+        )
     op.drop_constraint(
         "ck_organization_staff_uat_read_only_expiring",
         "organization_staff",

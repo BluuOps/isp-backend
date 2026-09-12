@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -48,6 +48,7 @@ def _correlation_id(value: str | None) -> str:
 @router.post("/read-only", response_model=CreateFixtureResponse, status_code=201)
 def create_fixture(
     payload: CreateFixtureRequest,
+    response: Response,
     x_request_id: str | None = Header(default=None),
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_platform_admin),
@@ -59,6 +60,8 @@ def create_fixture(
         correlation_id=_correlation_id(x_request_id),
     )
     db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     return CreateFixtureResponse(**fixture.__dict__)
 
 

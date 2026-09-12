@@ -2,9 +2,11 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import make_url
 
 ENV_FILE = os.getenv("RADIUSFIBER_ENV_FILE", "/etc/radiusfiber/.env")
 load_dotenv(ENV_FILE, override=False)
+STAGING_UAT_DATABASE_NAME = "isp_db_stage"
 
 
 def required_environment(name: str) -> str:
@@ -160,11 +162,24 @@ class Settings:
     webhook_max_processing_attempts: int = int(os.getenv("WEBHOOK_MAX_PROCESSING_ATTEMPTS", "5"))
 
     def validate_staging_uat_fixture_configuration(self) -> None:
-        if self.staging_uat_fixtures_enabled and self.deployment_environment != "staging":
+        if not self.staging_uat_fixtures_enabled:
+            return
+        if self.deployment_environment != "staging":
             raise RuntimeError(
                 "STAGING_UAT_FIXTURES_ENABLED may only be enabled when "
                 "RADIUSFIBER_ENVIRONMENT=staging"
             )
+        if make_url(self.database_url).database != STAGING_UAT_DATABASE_NAME:
+            raise RuntimeError(
+                "STAGING_UAT_FIXTURES_ENABLED requires database isp_db_stage"
+            )
+
+    def staging_uat_fixture_routes_enabled(self) -> bool:
+        return (
+            self.deployment_environment == "staging"
+            and self.staging_uat_fixtures_enabled
+            and make_url(self.database_url).database == STAGING_UAT_DATABASE_NAME
+        )
 
     def require_paystack(self) -> None:
         if not self.paystack_enabled:

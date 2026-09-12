@@ -170,6 +170,14 @@ READ_ONLY_PERMISSIONS = frozenset(
     }
 )
 
+UAT_FIXTURE_PERMISSIONS = frozenset(
+    {
+        Permission.OLT_INVENTORY_READ,
+        Permission.OLT_TELEMETRY_READ,
+        Permission.OLT_ALARMS_READ,
+    }
+)
+
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "Organization Admin": ALL_ORGANIZATION_PERMISSIONS,
     "NOC": frozenset(
@@ -276,6 +284,12 @@ class AuthenticatedPrincipal:
 
 def role_permissions(role: str) -> frozenset[str]:
     return ROLE_PERMISSIONS.get(role, frozenset())
+
+
+def staff_permissions(staff: OrganizationStaff) -> frozenset[str]:
+    if getattr(staff, "is_uat_fixture", False):
+        return UAT_FIXTURE_PERMISSIONS
+    return role_permissions(staff.role)
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -389,7 +403,12 @@ def get_authenticated_principal(
             OrganizationStaff.status == "active",
             or_(
                 OrganizationStaff.is_uat_fixture.is_(False),
-                OrganizationStaff.uat_expires_at > func.current_timestamp(),
+                (
+                    OrganizationStaff.is_uat_fixture.is_(True)
+                    & (OrganizationStaff.role == "Read Only")
+                    & OrganizationStaff.uat_revoked_at.is_(None)
+                    & (OrganizationStaff.uat_expires_at > func.current_timestamp())
+                ),
             ),
         )
         .first()
@@ -419,7 +438,7 @@ def get_authenticated_principal(
         organization_id=organization.id,
         organization_slug=organization.slug,
         organization_role=staff.role,
-        effective_permissions=role_permissions(staff.role),
+        effective_permissions=staff_permissions(staff),
         correlation_id=str(payload["jti"]),
         actor_label=staff.email,
     )
