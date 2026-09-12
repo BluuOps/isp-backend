@@ -2,9 +2,11 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import make_url
 
 ENV_FILE = os.getenv("RADIUSFIBER_ENV_FILE", "/etc/radiusfiber/.env")
 load_dotenv(ENV_FILE, override=False)
+STAGING_UAT_DATABASE_NAME = "isp_db_stage"
 
 
 def required_environment(name: str) -> str:
@@ -17,6 +19,10 @@ def required_environment(name: str) -> str:
 @dataclass(frozen=True)
 class Settings:
     database_url: str = required_environment("DATABASE_URL")
+    deployment_environment: str = os.getenv("RADIUSFIBER_ENVIRONMENT", "production").strip().lower()
+    staging_uat_fixtures_enabled: bool = os.getenv(
+        "STAGING_UAT_FIXTURES_ENABLED", "false"
+    ).lower() in {"1", "true", "yes", "on"}
     default_organization_slug: str = os.getenv("DEFAULT_ORGANIZATION_SLUG", "smart-fiber")
     radclient_bin: str = os.getenv("RADIUS_RADCLIENT_BIN", "/usr/bin/radclient")
     coa_secret_path: str = os.getenv(
@@ -155,6 +161,26 @@ class Settings:
     webhook_max_payload_bytes: int = int(os.getenv("WEBHOOK_MAX_PAYLOAD_BYTES", "262144"))
     webhook_max_processing_attempts: int = int(os.getenv("WEBHOOK_MAX_PROCESSING_ATTEMPTS", "5"))
 
+    def validate_staging_uat_fixture_configuration(self) -> None:
+        if not self.staging_uat_fixtures_enabled:
+            return
+        if self.deployment_environment != "staging":
+            raise RuntimeError(
+                "STAGING_UAT_FIXTURES_ENABLED may only be enabled when "
+                "RADIUSFIBER_ENVIRONMENT=staging"
+            )
+        if make_url(self.database_url).database != STAGING_UAT_DATABASE_NAME:
+            raise RuntimeError(
+                "STAGING_UAT_FIXTURES_ENABLED requires database isp_db_stage"
+            )
+
+    def staging_uat_fixture_routes_enabled(self) -> bool:
+        return (
+            self.deployment_environment == "staging"
+            and self.staging_uat_fixtures_enabled
+            and make_url(self.database_url).database == STAGING_UAT_DATABASE_NAME
+        )
+
     def require_paystack(self) -> None:
         if not self.paystack_enabled:
             return
@@ -172,3 +198,4 @@ class Settings:
 
 
 settings = Settings()
+settings.validate_staging_uat_fixture_configuration()

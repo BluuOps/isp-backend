@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Callable, TypeVar
 
 from fastapi import Depends, Header, HTTPException
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from app.core.config import settings
@@ -169,6 +170,14 @@ READ_ONLY_PERMISSIONS = frozenset(
     }
 )
 
+UAT_FIXTURE_PERMISSIONS = frozenset(
+    {
+        Permission.OLT_INVENTORY_READ,
+        Permission.OLT_TELEMETRY_READ,
+        Permission.OLT_ALARMS_READ,
+    }
+)
+
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "Organization Admin": ALL_ORGANIZATION_PERMISSIONS,
     "NOC": frozenset(
@@ -275,6 +284,12 @@ class AuthenticatedPrincipal:
 
 def role_permissions(role: str) -> frozenset[str]:
     return ROLE_PERMISSIONS.get(role, frozenset())
+
+
+def staff_permissions(staff: OrganizationStaff) -> frozenset[str]:
+    if getattr(staff, "is_uat_fixture", False):
+        return UAT_FIXTURE_PERMISSIONS
+    return role_permissions(staff.role)
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -385,6 +400,16 @@ def get_authenticated_principal(
         .filter(
             OrganizationStaff.id == staff_id,
             OrganizationStaff.organization_id == organization_id,
+            OrganizationStaff.status == "active",
+            or_(
+                OrganizationStaff.is_uat_fixture.is_(False),
+                (
+                    OrganizationStaff.is_uat_fixture.is_(True)
+                    & (OrganizationStaff.role == "Read Only")
+                    & OrganizationStaff.uat_revoked_at.is_(None)
+                    & (OrganizationStaff.uat_expires_at > func.current_timestamp())
+                ),
+            ),
         )
         .first()
     )
@@ -398,8 +423,6 @@ def get_authenticated_principal(
     )
     if not staff or str(payload["sub"]) != f"staff:{staff.id}":
         raise HTTPException(status_code=401, detail="Identity is no longer available")
-    if staff.status != "active":
-        raise HTTPException(status_code=401, detail="Identity is disabled")
     if not organization or organization.status != "active":
         raise HTTPException(
             status_code=403,
@@ -415,7 +438,7 @@ def get_authenticated_principal(
         organization_id=organization.id,
         organization_slug=organization.slug,
         organization_role=staff.role,
-        effective_permissions=role_permissions(staff.role),
+        effective_permissions=staff_permissions(staff),
         correlation_id=str(payload["jti"]),
         actor_label=staff.email,
     )

@@ -130,8 +130,8 @@ class HealthReadinessTests(unittest.IsolatedAsyncioTestCase):
         )
         return status, json.loads(body)
 
-    async def test_current_0015_revision_is_ready(self):
-        status, body = await self._request("0015_expiry_reject_ownership")
+    async def test_current_0016_revision_is_ready(self):
+        status, body = await self._request("0016_staging_uat_fixtures")
 
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ready")

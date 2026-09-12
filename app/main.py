@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import settings
 from app.core.errors import ApiError, api_error_handler, integrity_error_handler
 from app.database import engine
-from app.routers import auth, billing, customer_auth, customer_portal, customers, network, olt, organization, payments, plan_activations, plans, platform, radius_sessions, release, users, webhooks
+from app.routers import auth, billing, customer_auth, customer_portal, customers, network, olt, organization, payments, plan_activations, plans, platform, radius_sessions, release, staging_uat, users, webhooks
 
 
 app = FastAPI(
@@ -38,6 +38,17 @@ app.include_router(customer_auth.router)
 app.include_router(customer_portal.router)
 app.include_router(webhooks.router)
 app.include_router(release.router)
+
+
+def register_staging_uat_routes(application: FastAPI, configuration=settings) -> bool:
+    configuration.validate_staging_uat_fixture_configuration()
+    if not configuration.staging_uat_fixture_routes_enabled():
+        return False
+    application.include_router(staging_uat.router)
+    return True
+
+
+register_staging_uat_routes(app)
 
 
 @app.get("/health")
@@ -83,7 +94,7 @@ def readiness() -> dict[str, object]:
             and os.access(settings.radclient_bin, os.X_OK)
         ),
         "disk": shutil.disk_usage("/").free >= 512 * 1024 * 1024,
-        "migration_status": migration_current == "0015_expiry_reject_ownership",
+        "migration_status": migration_current == "0016_staging_uat_fixtures",
     }
     ready = all(value for value in checks.values() if isinstance(value, bool))
     return {"status": "ready" if ready else "not_ready", "checks": checks}

@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.authorization import (
@@ -12,7 +13,7 @@ from app.core.authorization import (
     create_access_token,
     decode_access_token,
     get_authenticated_principal,
-    role_permissions,
+    staff_permissions,
 )
 from app.core.config import settings
 from app.core.principal import (
@@ -124,7 +125,7 @@ def _organization_auth_response(
     organization: Organization,
     token: str,
 ) -> AuthResponse:
-    permissions = role_permissions(staff.role)
+    permissions = staff_permissions(staff)
     return AuthResponse(
         token=token,
         user=AuthUser(
@@ -158,12 +159,65 @@ def _active_staff(
             OrganizationStaff.organization_id == organization_id,
             OrganizationStaff.email == email,
             OrganizationStaff.status == "active",
+            or_(
+                OrganizationStaff.is_uat_fixture.is_(False),
+                (
+                    OrganizationStaff.is_uat_fixture.is_(True)
+                    & (OrganizationStaff.role == "Read Only")
+                    & OrganizationStaff.uat_revoked_at.is_(None)
+                    & (OrganizationStaff.uat_expires_at > func.current_timestamp())
+                ),
+            ),
         )
         .first()
     )
     if not staff:
+        fixture = (
+            db.query(OrganizationStaff)
+            .filter(
+                OrganizationStaff.organization_id == organization_id,
+                OrganizationStaff.email == email,
+                OrganizationStaff.is_uat_fixture.is_(True),
+            )
+            .first()
+        )
+        if fixture:
+            _record_fixture_authentication(
+                db,
+                fixture,
+                action="uat.read_only_fixture.authentication_rejected",
+                success=False,
+                reason="inactive_or_expired",
+            )
+            db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     return staff
+
+
+def _record_fixture_authentication(
+    db: Session,
+    staff: OrganizationStaff,
+    *,
+    action: str,
+    success: bool,
+    reason: str,
+) -> None:
+    record_audit(
+        db,
+        organization_id=staff.organization_id,
+        actor=staff.email,
+        actor_type="organization_staff",
+        actor_id=str(staff.id),
+        actor_label=staff.email,
+        action=action,
+        target_type="organization_staff",
+        target_id=str(staff.id),
+        success=success,
+        new_value={
+            "fixture_id": staff.uat_fixture_id,
+            "outcome": reason,
+        },
+    )
 
 
 def _staff_password_valid(staff: OrganizationStaff, password: str) -> tuple[bool, str]:
@@ -236,6 +290,15 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     staff = _active_staff(db, organization.id, payload.email.strip().lower())
     valid, authentication_method = _staff_password_valid(staff, payload.password)
     if not valid:
+        if staff.is_uat_fixture:
+            _record_fixture_authentication(
+                db,
+                staff,
+                action="uat.read_only_fixture.authentication_rejected",
+                success=False,
+                reason="invalid_password",
+            )
+            db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     secret = settings.jwt_secret
     if not secret:
@@ -244,6 +307,12 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             detail="Authentication is not configured",
         )
     now = int(time.time())
+    token_expires_at = now + settings.auth_access_token_ttl_seconds
+    if staff.is_uat_fixture:
+        if staff.uat_expires_at is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid UAT fixture")
+        token_expires_at = min(token_expires_at, int(staff.uat_expires_at.timestamp()))
+    jti = uuid.uuid4().hex
     token = create_access_token(
         {
             "sub": f"staff:{staff.id}",
@@ -255,10 +324,10 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "tenant_id": organization.slug,
             "auth_method": authentication_method,
             "iat": now,
-            "exp": now + settings.auth_access_token_ttl_seconds,
+            "exp": token_expires_at,
             "iss": settings.auth_token_issuer,
             "aud": settings.auth_token_audience,
-            "jti": uuid.uuid4().hex,
+            "jti": jti,
         },
         secret,
     )
@@ -269,12 +338,25 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         actor_type="organization_staff",
         actor_id=str(staff.id),
         actor_label=staff.email,
-        action="auth.login",
+        action=(
+            "uat.read_only_fixture.authentication_succeeded"
+            if staff.is_uat_fixture
+            else "auth.login"
+        ),
         target_type="auth",
         target_id=f"staff:{staff.id}",
         new_value={
             "tenant_id": organization.slug,
             "authentication_method": authentication_method,
+            "correlation_id": token_fingerprint({"jti": jti}),
+            **(
+                {
+                    "uat_fixture_id": staff.uat_fixture_id,
+                    "uat_expires_at": staff.uat_expires_at.isoformat(),
+                }
+                if staff.is_uat_fixture
+                else {}
+            ),
         },
     )
     db.commit()
