@@ -1,11 +1,23 @@
+from datetime import datetime
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.platform_auth import require_platform_admin
+from app.core.authorization import AuthenticatedPrincipal
+from app.core.platform_auth import require_platform_admin, require_recent_platform_admin
 from app.core.principal import reject_customer_principal
 from app.database import get_db
-from app.models import Customer, FeatureFlag, Organization, Subscription, User
+from app.models import (
+    Customer,
+    FeatureFlag,
+    Organization,
+    OrganizationAdminInvitation,
+    Subscription,
+    User,
+)
 from app.models.radacct import RadAcct
 from app.schemas.management import (
     FeatureFlagUpdate,
@@ -20,6 +32,11 @@ from app.schemas.management import (
 from app.services.audit import record_audit
 from app.services.onboarding import onboard_organization
 from app.services.radius_session_freshness import fresh_active_session_conditions
+from app.services.admin_invitations import (
+    create_admin_invitation,
+    database_now,
+    revoke_admin_invitation,
+)
 
 router = APIRouter(
     prefix="/platform",
@@ -28,11 +45,175 @@ router = APIRouter(
 )
 
 
+class AdminInvitationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=255)
+    purpose: Literal["bootstrap", "invite", "recovery"]
+    reason: str = Field(min_length=8, max_length=500)
+
+
+class AdminInvitationCreated(BaseModel):
+    id: int
+    organization_id: int
+    purpose: str
+    expires_at: datetime
+    invitation_token: str
+
+
+class AdminInvitationStatus(BaseModel):
+    id: int
+    organization_id: int
+    email: str
+    purpose: str
+    expires_at: datetime
+    used_at: datetime | None
+    revoked_at: datetime | None
+    attempts_remaining: int
+    correlation_id: str
+    active: bool
+
+
 def organization_or_404(db: Session, organization_id: int) -> Organization:
     organization = db.query(Organization).filter(Organization.id == organization_id).first()
     if not organization:
         raise HTTPException(status_code=404, detail="Organization not found")
     return organization
+
+
+def _invitation_status(
+    invitation: OrganizationAdminInvitation,
+    *,
+    now: datetime,
+) -> AdminInvitationStatus:
+    expires_at = invitation.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=now.tzinfo)
+    return AdminInvitationStatus(
+        id=invitation.id,
+        organization_id=invitation.organization_id,
+        email=invitation.email,
+        purpose=invitation.purpose,
+        expires_at=invitation.expires_at,
+        used_at=invitation.used_at,
+        revoked_at=invitation.revoked_at,
+        attempts_remaining=max(0, invitation.max_attempts - invitation.attempt_count),
+        correlation_id=invitation.correlation_id,
+        active=(
+            invitation.used_at is None
+            and invitation.revoked_at is None
+            and expires_at > now
+            and invitation.attempt_count < invitation.max_attempts
+        ),
+    )
+
+
+@router.post(
+    "/organizations/{organization_id}/admin-invitations",
+    response_model=AdminInvitationCreated,
+    status_code=201,
+)
+def create_organization_admin_invitation(
+    organization_id: int,
+    payload: AdminInvitationCreate,
+    response: Response,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_recent_platform_admin),
+) -> AdminInvitationCreated:
+    try:
+        result = create_admin_invitation(
+            db,
+            organization_id=organization_id,
+            email=payload.email,
+            purpose=payload.purpose,
+            reason=payload.reason,
+            principal=principal,
+        )
+        db.commit()
+        db.refresh(result.invitation)
+    except Exception:
+        db.rollback()
+        raise
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return AdminInvitationCreated(
+        id=result.invitation.id,
+        organization_id=result.invitation.organization_id,
+        purpose=result.invitation.purpose,
+        expires_at=result.invitation.expires_at,
+        invitation_token=result.token,
+    )
+
+
+@router.get(
+    "/organizations/{organization_id}/admin-invitations",
+    response_model=list[AdminInvitationStatus],
+)
+def list_organization_admin_invitations(
+    organization_id: int,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_recent_platform_admin),
+) -> list[AdminInvitationStatus]:
+    del principal
+    organization_or_404(db, organization_id)
+    now = database_now(db)
+    invitations = (
+        db.query(OrganizationAdminInvitation)
+        .filter(
+            OrganizationAdminInvitation.organization_id == organization_id,
+            OrganizationAdminInvitation.used_at.is_(None),
+            OrganizationAdminInvitation.revoked_at.is_(None),
+            OrganizationAdminInvitation.expires_at > now,
+        )
+        .order_by(OrganizationAdminInvitation.expires_at, OrganizationAdminInvitation.id)
+        .all()
+    )
+    return [_invitation_status(item, now=now) for item in invitations]
+
+
+@router.get(
+    "/organizations/{organization_id}/admin-invitations/{invitation_id}",
+    response_model=AdminInvitationStatus,
+)
+def get_organization_admin_invitation(
+    organization_id: int,
+    invitation_id: int,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_recent_platform_admin),
+) -> AdminInvitationStatus:
+    del principal
+    invitation = db.query(OrganizationAdminInvitation).filter(
+        OrganizationAdminInvitation.id == invitation_id,
+        OrganizationAdminInvitation.organization_id == organization_id,
+    ).first()
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    return _invitation_status(invitation, now=database_now(db))
+
+
+@router.delete(
+    "/organizations/{organization_id}/admin-invitations/{invitation_id}",
+)
+def revoke_organization_admin_invitation(
+    organization_id: int,
+    invitation_id: int,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_recent_platform_admin),
+) -> dict[str, str]:
+    invitation = (
+        db.query(OrganizationAdminInvitation)
+        .filter(
+            OrganizationAdminInvitation.id == invitation_id,
+            OrganizationAdminInvitation.organization_id == organization_id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    changed = revoke_admin_invitation(db, invitation=invitation, principal=principal)
+    db.commit()
+    return {"status": "revoked" if changed else "already_revoked"}
 
 
 @router.get("/dashboard")

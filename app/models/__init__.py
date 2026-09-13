@@ -12,6 +12,10 @@ from app.models.olt_inventory import OltCard, OltOnu, OltPonPort, OltUplink
 from app.models.olt_polling import OltPollRun
 from app.models.network_access_server import NetworkAccessServer
 from app.models.organization import Organization
+from app.models.organization_admin_invitation import (
+    OrganizationAdminInvitation,
+    OrganizationAdminInvitationRateLimit,
+)
 from app.models.organization_billing_profile import OrganizationBillingProfile
 from app.models.organization_role import OrganizationRole
 from app.models.organization_staff import OrganizationStaff
@@ -38,6 +42,8 @@ __all__ = [
     "ExpiryScanRun",
     "RadiusRejectOwnership",
     "Organization",
+    "OrganizationAdminInvitation",
+    "OrganizationAdminInvitationRateLimit",
     "OrganizationBillingProfile",
     "OrganizationRole",
     "OrganizationStaff",

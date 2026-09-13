@@ -13,6 +13,10 @@ class OrganizationStaff(Base):
             "(role = 'Read Only' AND uat_fixture_id IS NOT NULL AND uat_expires_at IS NOT NULL)",
             name="ck_organization_staff_uat_read_only_expiring",
         ),
+        CheckConstraint(
+            "credential_version >= 1",
+            name="ck_organization_staff_credential_version",
+        ),
     )
 
     id = Column(Integer, primary_key=True)
@@ -27,5 +31,7 @@ class OrganizationStaff(Base):
     uat_fixture_id = Column(String(64), nullable=True, unique=True, index=True)
     uat_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
     uat_revoked_at = Column(DateTime(timezone=True), nullable=True)
+    credential_version = Column(Integer, nullable=False, default=1, server_default="1")
+    credentials_revoked_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -728,8 +728,8 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
         config = Config("alembic.ini")
         with self.engine.connect() as connection:
             revision = connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0016_staging_uat_fixtures":
-            command.upgrade(config, "0016_staging_uat_fixtures")
+        if revision != "0017_organization_admin_invitations":
+            command.upgrade(config, "head")
 
         with self.Session.begin() as db:
             audit_ids = []
@@ -886,7 +886,7 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
         with self.engine.connect() as connection:
             self.assertEqual(
                 connection.scalar(text("SELECT version_num FROM alembic_version")),
-                "0016_staging_uat_fixtures",
+                "0017_organization_admin_invitations",
             )
             fixture_metadata = connection.execute(
                 text(
@@ -941,15 +941,15 @@ class StagingUatFixturePostgresTests(unittest.TestCase):
                 ),
                 1,
             )
-        command.upgrade(config, "0016_staging_uat_fixtures")
+        command.upgrade(config, "head")
         self.assertEqual(
             ScriptDirectory.from_config(config).get_heads(),
-            ["0016_staging_uat_fixtures"],
+            ["0017_organization_admin_invitations"],
         )
         with self.engine.connect() as connection:
             self.assertEqual(
                 connection.scalar(text("SELECT version_num FROM alembic_version")),
-                "0016_staging_uat_fixtures",
+                "0017_organization_admin_invitations",
             )
 
 

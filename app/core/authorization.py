@@ -423,6 +423,12 @@ def get_authenticated_principal(
     )
     if not staff or str(payload["sub"]) != f"staff:{staff.id}":
         raise HTTPException(status_code=401, detail="Identity is no longer available")
+    try:
+        token_credential_version = int(payload.get("credential_version", 1))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid identity claims") from exc
+    if token_credential_version != (getattr(staff, "credential_version", None) or 1):
+        raise HTTPException(status_code=401, detail="Credentials have been revoked")
     if not organization or organization.status != "active":
         raise HTTPException(
             status_code=403,

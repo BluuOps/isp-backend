@@ -85,6 +85,15 @@ class Settings:
         60,
         min(3600, int(os.getenv("AUTH_TOKEN_REVOCATION_RETENTION_SECONDS", "300"))),
     )
+    admin_invitation_ttl_seconds: int = max(
+        900, min(1800, int(os.getenv("ADMIN_INVITATION_TTL_SECONDS", "1200")))
+    )
+    admin_invitation_recent_auth_seconds: int = max(
+        300, min(1800, int(os.getenv("ADMIN_INVITATION_RECENT_AUTH_SECONDS", "600")))
+    )
+    admin_invitation_max_attempts: int = max(
+        3, min(10, int(os.getenv("ADMIN_INVITATION_MAX_ATTEMPTS", "5")))
+    )
     olt_management_networks: tuple[str, ...] = tuple(
         item.strip()
         for item in os.getenv(
