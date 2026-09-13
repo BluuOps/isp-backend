@@ -1,4 +1,4 @@
-"""Validate the ephemeral CI-only 0015/0016 PostgreSQL migration chain."""
+"""Validate the ephemeral CI-only 0016/0017 PostgreSQL migration chain."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import make_url
 
 
-BASE_REVISION = "0015_expiry_reject_ownership"
-HEAD_REVISION = "0016_staging_uat_fixtures"
+BASE_REVISION = "0016_staging_uat_fixtures"
+HEAD_REVISION = "0017_organization_admin_invitations"
 
 
 def _validated_disposable_url() -> str:
@@ -50,6 +50,15 @@ def main() -> None:
     heads = script.get_heads()
     if heads != [HEAD_REVISION]:
         raise RuntimeError(f"expected one Alembic head {HEAD_REVISION}, got {heads}")
+    # ``create_all`` builds head metadata but does not create Alembic's version
+    # table. Stamp the shorter predecessor first, widen the bookkeeping column
+    # exactly as 0017 does, then stamp head so the first downgrade materializes
+    # a genuine 0016 schema for the forward/reverse rehearsal.
+    command.stamp(config, BASE_REVISION)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)"
+        )
     command.stamp(config, HEAD_REVISION)
     command.downgrade(config, BASE_REVISION)
     with engine.connect() as connection:
@@ -62,7 +71,7 @@ def main() -> None:
         protected_after = protected_counts(connection)
     if protected_after != protected_before:
         raise RuntimeError("protected customer, billing, or RADIUS data changed")
-    print("MIGRATION_REHEARSAL=0015_to_0016_to_0015_to_0016_passed")
+    print("MIGRATION_REHEARSAL=0016_to_0017_to_0016_to_0017_passed")
     print("ALEMBIC_HEADS=single")
     print("ALEMBIC_CHECK=clean")
     print("PROTECTED_DATA=unchanged")

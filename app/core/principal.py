@@ -25,6 +25,7 @@ PLATFORM_PERMISSIONS = [
     "platform.feature_flags.read",
     "platform.feature_flags.manage",
     "platform.health.read",
+    "platform.organization_admins.manage",
 ]
 
 ORGANIZATION_BRIDGE_PERMISSIONS = [

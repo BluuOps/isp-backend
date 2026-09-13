@@ -33,6 +33,8 @@ REQUIRED_TABLES = {
     "expiry_disconnect_jobs",
     "radius_reject_ownerships",
     "auth_token_revocations",
+    "organization_admin_invitations",
+    "organization_admin_invitation_rate_limits",
     "olt_credential_references",
     "olt_devices",
     "olt_cards",
@@ -130,8 +132,8 @@ class HealthReadinessTests(unittest.IsolatedAsyncioTestCase):
         )
         return status, json.loads(body)
 
-    async def test_current_0016_revision_is_ready(self):
-        status, body = await self._request("0016_staging_uat_fixtures")
+    async def test_current_0017_revision_is_ready(self):
+        status, body = await self._request("0017_organization_admin_invitations")
 
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ready")

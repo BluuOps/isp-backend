@@ -3,7 +3,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from app.models.organization_staff import OrganizationStaff
 from app.services.audit import record_audit
 from app.services.security import verify_password
 from app.services.token_revocation import ensure_token_not_revoked, revoke_token, token_fingerprint
+from app.services.admin_invitations import accept_admin_invitation
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -37,6 +38,13 @@ class LoginRequest(BaseModel):
     email: str = Field(min_length=1)
     password: str = Field(min_length=1)
     tenant_id: str | None = None
+
+
+class AdminInvitationAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    invitation_token: str = Field(min_length=32, max_length=256)
+    new_password: str = Field(min_length=12, max_length=128)
 
 
 class AuthUser(BaseModel):
@@ -224,7 +232,8 @@ def _staff_password_valid(staff: OrganizationStaff, password: str) -> tuple[bool
     if verify_password(password, staff.password_hash):
         return True, "password"
     if (
-        settings.internal_admin_email
+        getattr(staff, "credentials_revoked_at", None) is None
+        and settings.internal_admin_email
         and settings.internal_admin_password
         and secrets.compare_digest(staff.email.lower(), settings.internal_admin_email.lower())
         and secrets.compare_digest(password, settings.internal_admin_password)
@@ -254,6 +263,34 @@ def _platform_auth_response(email: str, token: str) -> AuthResponse:
             primaryColor="#2563eb",
         ),
     )
+
+
+@router.post("/admin-invitations/accept")
+def accept_organization_admin_invitation(
+    payload: AdminInvitationAcceptRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    client_host = request.client.host if request.client else "unknown"
+    try:
+        invitation, _staff = accept_admin_invitation(
+            db,
+            token=payload.invitation_token,
+            new_password=payload.new_password,
+            rate_identity=client_host,
+        )
+        db.commit()
+    except HTTPException:
+        if db.in_transaction():
+            db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invitation is invalid or unavailable",
+        )
+    return {"status": "accepted", "purpose": invitation.purpose}
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -328,6 +365,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "iss": settings.auth_token_issuer,
             "aud": settings.auth_token_audience,
             "jti": jti,
+            "credential_version": getattr(staff, "credential_version", None) or 1,
         },
         secret,
     )
