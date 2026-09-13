@@ -6,47 +6,71 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.authorization import Permission, require_permission
+from app.core.config import settings
+from app.core.tenant import OrganizationContext, get_organization_context
 from app.database import get_db
-from app.models import RadAcct, RadCheck, User
+from app.models import NetworkAccessServer, RadAcct, User, Zone
 from app.schemas.radius_session import (
     RadiusDisconnectRequest,
     RadiusDisconnectResponse,
     RadiusSessionResponse,
 )
+from app.services.audit import record_audit
+from app.services.radius_authorization import (
+    MANUAL_DISCONNECT_REASON,
+    RejectOwnershipConflict,
+    ensure_owned_reject,
+    owned_reject_reasons,
+)
+from app.services.radius_session_freshness import fresh_active_session_conditions
 
 logger = logging.getLogger(__name__)
 
-RADCLIENT_BIN = os.getenv("RADIUS_RADCLIENT_BIN", "/usr/bin/radclient")
-COA_SECRET_FILE = os.getenv(
-    "RADIUS_COA_SECRET_FILE",
-    "/etc/radiusfiber/coa.secret",
-)
-COA_NAS_IP = os.getenv("RADIUS_COA_NAS_IP", "192.168.222.1")
-COA_PORT = os.getenv("RADIUS_COA_PORT", "3799")
-PILOT_CALLED_STATION_ID = os.getenv(
-    "RADIUS_PILOT_CALLED_STATION_ID",
-    "core-radius-pilot",
-)
-
-REJECT_ATTRIBUTE = "Auth-Type"
-REJECT_VALUE = "Reject"
-
+RADCLIENT_BIN = settings.radclient_bin
+COA_SECRET_FILE = settings.coa_secret_path
+COA_NAS_IP = settings.coa_nas_ip
+COA_PORT = settings.coa_port
+PILOT_CALLED_STATION_ID = settings.pilot_calledstationid
 
 router = APIRouter(prefix="/radius", tags=["RADIUS Sessions"])
 
 
-@router.get("/sessions", response_model=List[RadiusSessionResponse])
-def list_active_sessions(db: Session = Depends(get_db)) -> list[RadiusSessionResponse]:
+@router.get(
+    "/sessions",
+    response_model=List[RadiusSessionResponse],
+    dependencies=[Depends(require_permission(Permission.RADIUS_SESSIONS_READ))],
+)
+def list_active_sessions(
+    db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
+) -> list[RadiusSessionResponse]:
     rows = (
         db.query(RadAcct)
-        .filter(RadAcct.acctstoptime.is_(None))
+        .join(User, User.username == RadAcct.username)
+        .filter(
+            *fresh_active_session_conditions(),
+            User.organization_id == organization.id,
+        )
         .order_by(RadAcct.acctstarttime.desc())
         .limit(500)
         .all()
     )
 
-    return [
-        RadiusSessionResponse(
+    responses = []
+    for row in rows:
+        mapping = (
+            db.query(NetworkAccessServer, Zone)
+            .join(Zone, Zone.id == NetworkAccessServer.zone_id)
+            .filter(
+                NetworkAccessServer.organization_id == organization.id,
+                Zone.organization_id == organization.id,
+                NetworkAccessServer.nas_ip_address == row.nasipaddress,
+            )
+            .first()
+        )
+        nas, zone = mapping if mapping else (None, None)
+        responses.append(RadiusSessionResponse(
             id=row.radacctid,
             session_id=row.acctsessionid,
             username=row.username or "",
@@ -56,32 +80,68 @@ def list_active_sessions(db: Session = Depends(get_db)) -> list[RadiusSessionRes
             updated_at=row.acctupdatetime,
             input_octets=row.acctinputoctets or 0,
             output_octets=row.acctoutputoctets or 0,
-        )
-        for row in rows
-    ]
+            nas_id=nas.id if nas else None,
+            nas_name=nas.display_name if nas else None,
+            zone_id=zone.id if zone else None,
+            zone_name=zone.name if zone else None,
+            mapping_status="mapped" if nas else "unmapped",
+        ))
+    return responses
 
 
 @router.post(
     "/disconnect",
     response_model=RadiusDisconnectResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(require_permission(Permission.RADIUS_SESSIONS_DISCONNECT))
+    ],
 )
 def disconnect_session(
     payload: RadiusDisconnectRequest,
     db: Session = Depends(get_db),
+    organization: OrganizationContext = Depends(get_organization_context),
 ) -> RadiusDisconnectResponse:
-    account = (
-        db.query(User)
-        .filter(User.username == payload.username)
-        .first()
-    )
+    if not settings.radius_coa_enabled or settings.radius_disconnect_mode != "real":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RADIUS disconnect execution is disabled",
+        )
+    account = db.query(User).filter(
+        User.username == payload.username,
+        User.organization_id == organization.id,
+    ).first()
     if not account:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="PPPoE account was not found",
         )
 
-    if account.status != "active":
+    try:
+        manual_disconnect_owned = MANUAL_DISCONNECT_REASON in owned_reject_reasons(db, account)
+    except RejectOwnershipConflict as exc:
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.disconnect_ownership_conflict",
+            target_type="user",
+            target_id=str(account.id),
+            new_value={"radcheck_ids": list(exc.radcheck_ids)},
+            success=False,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "radius_reject_ownership_conflict",
+                "message": "An existing RADIUS reject requires explicit ownership reconciliation.",
+            },
+        ) from exc
+
+    if account.status != "active" and not (
+        account.status == "suspended" and manual_disconnect_owned
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="PPPoE account is already disconnected or inactive",
@@ -109,7 +169,7 @@ def disconnect_session(
         db.query(RadAcct)
         .filter(
             RadAcct.username == payload.username,
-            RadAcct.acctstoptime.is_(None),
+            *fresh_active_session_conditions(),
             RadAcct.calledstationid == PILOT_CALLED_STATION_ID,
         )
         .order_by(RadAcct.acctstarttime.desc())
@@ -124,46 +184,52 @@ def disconnect_session(
                 detail="Session NAS does not match the configured Core RADIUS NAS",
             )
 
-        if not os.path.isfile(COA_SECRET_FILE) or not os.access(
-            COA_SECRET_FILE,
-            os.R_OK,
-        ):
+        if not os.path.isfile(COA_SECRET_FILE) or not os.access(COA_SECRET_FILE, os.R_OK):
             logger.error("RADIUS CoA secret file is unavailable")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="RADIUS disconnect service is not configured",
             )
 
-    reject = (
-        db.query(RadCheck)
-        .filter(
-            RadCheck.username == account.username,
-            RadCheck.attribute == REJECT_ATTRIBUTE,
-        )
-        .first()
-    )
-    if reject:
-        reject.op = ":="
-        reject.value = REJECT_VALUE
-    else:
-        db.add(
-            RadCheck(
-                username=account.username,
-                attribute=REJECT_ATTRIBUTE,
-                op=":=",
-                value=REJECT_VALUE,
-            )
-        )
-
-    account.status = "suspended"
-
     try:
+        ensure_owned_reject(db, account, MANUAL_DISCONNECT_REASON)
+        account.status = "suspended"
         db.commit()
+    except RejectOwnershipConflict as exc:
+        db.rollback()
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.disconnect_ownership_conflict",
+            target_type="user",
+            target_id=str(account.id),
+            new_value={"radcheck_ids": list(exc.radcheck_ids)},
+            success=False,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "radius_reject_ownership_conflict",
+                "message": "An existing RADIUS reject requires explicit ownership reconciliation.",
+            },
+        ) from exc
     except Exception:
         db.rollback()
         raise
 
     if not active_session:
+        record_audit(
+            db,
+            organization_id=organization.id,
+            actor="internal-admin",
+            action="pppoe.disconnect_blocked_auth",
+            target_type="user",
+            target_id=account.username,
+            new_value={"active_session": False, "status": account.status},
+        )
+        db.commit()
         return RadiusDisconnectResponse(
             username=account.username,
             session_id=latest_session.acctsessionid,
@@ -176,9 +242,7 @@ def disconnect_session(
         f"NAS-IP-Address = {active_session.nasipaddress}",
     ]
     if active_session.framedipaddress:
-        attributes.append(
-            f"Framed-IP-Address = {active_session.framedipaddress}"
-        )
+        attributes.append(f"Framed-IP-Address = {active_session.framedipaddress}")
 
     request_body = "\n".join(attributes) + "\n"
 
@@ -199,10 +263,7 @@ def disconnect_session(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        logger.warning(
-            "RADIUS disconnect timed out for user %s",
-            payload.username,
-        )
+        logger.warning("RADIUS disconnect timed out for user %s", payload.username)
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="Authentication is blocked, but the NAS did not answer the disconnect request",
@@ -231,6 +292,16 @@ def disconnect_session(
         payload.username,
         active_session.acctsessionid,
     )
+    record_audit(
+        db,
+        organization_id=organization.id,
+        actor="internal-admin",
+        action="pppoe.disconnected",
+        target_type="radius_session",
+        target_id=active_session.acctsessionid,
+        new_value={"username": account.username, "nas_ip_address": str(active_session.nasipaddress)},
+    )
+    db.commit()
 
     return RadiusDisconnectResponse(
         username=payload.username,
